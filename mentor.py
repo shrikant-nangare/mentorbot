@@ -1,0 +1,490 @@
+import json
+import logging
+import math
+import re
+import socket
+from functools import lru_cache
+
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaEmbeddings, OllamaLLM
+
+import config
+
+logger = logging.getLogger(__name__)
+
+
+def ollama_is_reachable() -> bool:
+    try:
+        with socket.create_connection(
+            (config.OLLAMA_HOST, int(config.OLLAMA_PORT)),
+            timeout=float(config.OLLAMA_CONNECT_TIMEOUT_S),
+        ):
+            return True
+    except Exception:
+        return False
+
+
+def _ensure_ollama_reachable() -> None:
+    if not ollama_is_reachable():
+        raise RuntimeError(
+            f"Ollama is not reachable at {config.OLLAMA_HOST}:{config.OLLAMA_PORT}. Start it with `ollama serve`."
+        )
+
+
+@lru_cache(maxsize=1)
+def get_vectordb() -> Chroma:
+    return Chroma(
+        persist_directory=config.DB_DIR,
+        embedding_function=OllamaEmbeddings(model=config.OLLAMA_EMBED_MODEL),
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_llm_primary() -> OllamaLLM:
+    return OllamaLLM(model=config.OLLAMA_LLM_MODEL)
+
+
+@lru_cache(maxsize=1)
+def _get_llm_fallback() -> OllamaLLM:
+    if config.OLLAMA_LLM_FALLBACK_MODEL == config.OLLAMA_LLM_MODEL:
+        return _get_llm_primary()
+    return OllamaLLM(model=config.OLLAMA_LLM_FALLBACK_MODEL)
+
+
+def _normalize_text_for_chat(text: str) -> str:
+    t = text or ""
+    replacements = {
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u00a0": " ",
+        "½": "1/2",
+        "¼": "1/4",
+        "¾": "3/4",
+        "⅓": "1/3",
+        "⅔": "2/3",
+    }
+    for k, v in replacements.items():
+        t = t.replace(k, v)
+    return t
+
+
+def _llm_invoke(prompt: str) -> str:
+    try:
+        _ensure_ollama_reachable()
+        return _normalize_text_for_chat(_get_llm_primary().invoke(prompt))
+    except Exception as e:
+        msg = str(e).lower()
+        model_missing = ("model" in msg and ("not found" in msg or "pull" in msg or "unknown" in msg))
+        if model_missing and config.OLLAMA_LLM_FALLBACK_MODEL != config.OLLAMA_LLM_MODEL:
+            logger.warning(
+                "Primary Ollama model unavailable; falling back",
+                extra={"primary_model": config.OLLAMA_LLM_MODEL, "fallback_model": config.OLLAMA_LLM_FALLBACK_MODEL},
+            )
+            _ensure_ollama_reachable()
+            return _normalize_text_for_chat(_get_llm_fallback().invoke(prompt))
+        raise
+
+
+def _doc_source_label(metadata: dict | None) -> str:
+    md = metadata or {}
+    source = md.get("source") or md.get("file_path") or md.get("filename") or md.get("path") or ""
+    page = md.get("page")
+    if source and page is not None:
+        return f"{source} (page {page})"
+    if source:
+        return str(source)
+    if page is not None:
+        return f"page {page}"
+    return "unknown source"
+
+
+def retrieve_context(query: str, k: int = 4, min_relevance: float = 0.25) -> tuple[str, list[dict]]:
+    """
+    Returns (context_text, sources).
+    Filters low-relevance chunks to reduce topic drift.
+    """
+    sources: list[dict] = []
+    context_chunks: list[str] = []
+
+    try:
+        hits = get_vectordb().similarity_search_with_relevance_scores(query, k=k)
+        # hits: list[tuple[Document, float]] where score is higher = more relevant (0..1)
+        for doc, score in hits:
+            if score is None or float(score) < float(min_relevance):
+                continue
+            label = _doc_source_label(getattr(doc, "metadata", None))
+            text = (getattr(doc, "page_content", "") or "").strip()
+            if not text:
+                continue
+            sources.append({"label": label, "relevance": float(score)})
+            context_chunks.append(f"[{label} | relevance={float(score):.2f}]\n{text}")
+    except Exception:
+        # Fallback to basic similarity search if relevance scores aren't available
+        hits = get_vectordb().similarity_search(query, k=max(1, min(2, k)))
+        for doc in hits:
+            label = _doc_source_label(getattr(doc, "metadata", None))
+            text = (getattr(doc, "page_content", "") or "").strip()
+            if not text:
+                continue
+            sources.append({"label": label, "relevance": None})
+            context_chunks.append(f"[{label}]\n{text}")
+
+    return ("\n\n---\n\n".join(context_chunks), sources)
+
+
+def _format_history(history: list[dict] | None) -> str:
+    if not history:
+        return ""
+
+    lines: list[str] = []
+    for msg in history[-12:]:
+        role = str(msg.get("role", "")).strip().lower()
+        content = str(msg.get("content", "")).strip()
+        if not content:
+            continue
+        if role in {"assistant", "bot"}:
+            lines.append(f"MentorBot: {content}")
+        elif role in {"user", "human"}:
+            lines.append(f"User: {content}")
+        else:
+            lines.append(f"{role or 'Message'}: {content}")
+    return "\n".join(lines)
+
+
+def _is_explain_request(question: str) -> bool:
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+
+    # If it looks like a computation/exercise, treat it as problem-solving (not concept definition).
+    # Examples: "what is 1/2+3/4?", "solve 9x + 2 = 11", "what is 3*7?"
+    if re.search(r"\d", q) and re.search(r"[\+\-\*/=^]|(\d+\s*/\s*\d+)", q):
+        return False
+
+    # Direct concept explanation intents.
+    if re.match(r"^(explain|define|describe|what is|what are|meaning of|tell me about)\b", q):
+        return True
+
+    # Short imperative (common in chat): "noun?" / "explain noun?"
+    if q.endswith("?") and len(q.split()) <= 3:
+        return True
+
+    return False
+
+
+def _infer_problem_type(question: str) -> str:
+    q = (question or "").lower()
+    has_fraction = bool(re.search(r"\d+\s*/\s*\d+", q))
+    if has_fraction and "+" in q:
+        return "adding fractions"
+    if has_fraction and "-" in q:
+        return "subtracting fractions"
+    if has_fraction:
+        return "fractions"
+    if re.search(r"\b(solve|equation)\b", q) or "=" in q:
+        return "solving an equation"
+    if re.search(r"\b(photosynthesis|evaporation|gravity|atom|cell|energy|force|electricity|ecosystem)\b", q):
+        return "science concept"
+    return "general problem"
+
+
+_FRACTION_BINOP_RE = re.compile(r"(\d+)\s*/\s*(\d+)\s*([+\-])\s*(\d+)\s*/\s*(\d+)")
+
+
+def _lcm(a: int, b: int) -> int:
+    return abs(a * b) // math.gcd(a, b) if a and b else 0
+
+
+def _format_fraction_steps_from_question(question: str) -> str | None:
+    """
+    Returns a deterministic, math-formatted step-by-step guide for a simple
+    fraction expression like '1/2 + 3/4' (or with spaces), WITHOUT the final answer.
+    """
+    m = _FRACTION_BINOP_RE.search(question or "")
+    if not m:
+        return None
+
+    n1, d1, op, n2, d2 = (int(m.group(1)), int(m.group(2)), m.group(3), int(m.group(4)), int(m.group(5)))
+    if d1 == 0 or d2 == 0:
+        return None
+
+    lcd = _lcm(d1, d2)
+    if lcd == 0:
+        return None
+
+    f1 = lcd // d1
+    f2 = lcd // d2
+    n1s = n1 * f1
+    n2s = n2 * f2
+
+    op_word = "add" if op == "+" else "subtract"
+
+    # Important: do NOT compute the final numerator result.
+    combined = f"{n1s}{op}{n2s}"
+
+    return (
+        f"To {op_word} fractions, first make the denominators match (same-sized pieces), then combine the numerators.\n\n"
+        f"1. **Find a common denominator.**\n"
+        f"   The denominators are \\({d1}\\) and \\({d2}\\). The least common denominator (LCD) is \\({lcd}\\).\n\n"
+        f"2. **Rewrite each fraction with denominator \\({lcd}\\).**\n"
+        f"   \\[\n"
+        f"   \\frac{{{n1}}}{{{d1}}} = \\frac{{{n1}\\times {f1}}}{{{d1}\\times {f1}}} = \\frac{{{n1s}}}{{{lcd}}}\n"
+        f"   \\]\n"
+        f"   \\[\n"
+        f"   \\frac{{{n2}}}{{{d2}}} = \\frac{{{n2}\\times {f2}}}{{{d2}\\times {f2}}} = \\frac{{{n2s}}}{{{lcd}}}\n"
+        f"   \\]\n\n"
+        f"3. **Combine over the common denominator.**\n"
+        f"   \\[\n"
+        f"   \\frac{{{n1}}}{{{d1}}} {op} \\frac{{{n2}}}{{{d2}}} = \\frac{{{n1s}}}{{{lcd}}} {op} \\frac{{{n2s}}}{{{lcd}}} = \\frac{{{combined}}}{{{lcd}}}\n"
+        f"   \\]\n\n"
+        f"4. **Finish the last step.**\n"
+        f"   Now compute the numerator \\({n1s} {op} {n2s}\\) (and then simplify if possible).\n\n"
+        f"**Next step:** What do you get for \\({n1s} {op} {n2s}\\)?"
+    )
+
+
+def explain_concept(question: str, history: list[dict] | None = None) -> str:
+    history_text = _format_history(history)
+    retrieval_query = question if not history_text else f"{history_text}\nUser: {question}"
+    context, sources = retrieve_context(
+        retrieval_query,
+        k=max(config.RETRIEVAL_K, 6),
+        min_relevance=min(config.RETRIEVAL_MIN_RELEVANCE, 0.22),
+    )
+    sources_text = ", ".join([s["label"] for s in sources]) if sources else ""
+
+    prompt = f"""
+You are MentorBot, a tutor.
+
+The user is explicitly asking for a concept explanation. Respond with a clear mini-lesson.
+
+Requirements:
+- Write 4 to 5 SHORT paragraphs (separated by blank lines). Aim for 1–3 sentences per paragraph.
+- Start with a plain definition in paragraph 1.
+- Cover important related ideas in the next paragraphs.
+- If the concept has common types/categories (e.g., "types of nouns"), include them with 1–3 examples for each type.
+- Keep examples simple and correct.
+- Use the provided Context to ground the explanation when relevant. If Context is unrelated or empty, ignore it and use your own general knowledge.
+- Do not ask the user to answer a question before giving the explanation.
+- End with 1 short check-for-understanding question (optional for the student to answer).
+
+Style:
+- Keep it short and sweet; avoid long lists.
+- Prefer 4–6 high-value categories/types rather than an exhaustive taxonomy.
+- Use everyday examples and simple words.
+- Avoid special Unicode punctuation and fraction glyphs (use plain ASCII). For fractions, use LaTeX like \\(\\frac{1}{2}\\) or plain 1/2.
+- If the user's request includes specific numbers/symbols (e.g., fractions, equations), reuse THEM in your examples instead of inventing new numbers.
+
+Context:
+{context}
+
+Context sources (may be empty):
+{sources_text}
+
+User request:
+{question}
+""".strip()
+
+    return _llm_invoke(prompt)
+
+
+def mentor_response(question: str, history: list[dict] | None = None) -> str:
+    if _is_explain_request(question):
+        return explain_concept(question, history=history)
+
+    # Deterministic formatting for simple fraction add/sub questions.
+    fraction_guide = _format_fraction_steps_from_question(question)
+    if fraction_guide:
+        return fraction_guide
+
+    history_text = _format_history(history)
+    problem_type = _infer_problem_type(question)
+    retrieval_query = question if not history_text else f"{history_text}\nUser: {question}"
+    context, sources = retrieve_context(
+        retrieval_query,
+        k=config.RETRIEVAL_K,
+        min_relevance=config.RETRIEVAL_MIN_RELEVANCE,
+    )
+
+    prompt = f"""
+You are MentorBot, a tutor.
+
+Rules:
+- Teach step by step
+- Do NOT give the final numeric/result answer in your reply.
+- Ask guiding questions
+- Encourage thinking
+- Stay on the user's current topic; do not introduce unrelated problems.
+- If the latest user message is a short follow-up (e.g. "make denominator same"), treat it as part of the ongoing conversation.
+- Use Context only if it is relevant to the user's question; otherwise ignore it.
+- Verify the student's work internally before replying. Do not show hidden reasoning; only show concise checks/explanations.
+- Treat Context as *grounding*: use it to explain concepts more clearly, and avoid contradicting it.
+- If Context seems unrelated to the current question, ignore it rather than changing the topic.
+- For math/science questions (including computations, word problems, or "how does X work?"), start with a short concept primer (1–2 short paragraphs) BEFORE asking the first guiding question.
+- In that primer, use Context if relevant; if Context is empty/unhelpful, use your own general knowledge.
+- For computation/exercise questions, do NOT solve it fully in one reply. After the primer, ask the student for the next step. Only confirm the final answer after the student reaches it.
+- When the user asks an exercise (math/science), give the full set of steps to reach the answer, but leave the last computation/simplification as a blank for the student (e.g., "Now compute ___").
+- If the student provides a final answer, you may confirm whether it is correct and celebrate, but do not reveal the answer first.
+- Tailor the primer to the actual problem type and terminology. Do not introduce the wrong topic (e.g., do not talk about mixed fractions unless the problem contains a mixed fraction like "1 1/2").
+- If the problem is "adding fractions" or "subtracting fractions", focus on least common denominator / equivalent fractions (not mixed numbers).
+
+Conversation style:
+- Keep replies short and sweet (usually 3–8 sentences).
+- Ask ONE clear question at a time.
+- Prefer simple wording over formal wording.
+- Avoid repeating the same rule; only restate if the student is stuck.
+- Celebrate wins briefly when the student is correct, then move to the next small step.
+- Avoid special Unicode punctuation and fraction glyphs (use plain ASCII). For fractions, use LaTeX like \\(\\frac{1}{2}\\) or plain 1/2.
+
+Output structure for exercises:
+- 1–2 short primer sentences (only if helpful).
+- Then a numbered list of steps (3–6 steps).
+- End with ONE clear next-step question. Do not include the final computed result.
+- Use the exact numbers/expressions from the user's question for illustration (do not swap in different numbers).
+- Use mathematical formatting:
+  - Prefer LaTeX fractions like \\(\\frac{1}{2}\\) (not "1/2" unless the user typed only plain text).
+  - Show key transformations as equations using display math blocks: \\[ ... \\].
+  - Avoid stray special characters/glyphs (no emoji, no box-drawing, no odd spacing artifacts).
+
+For adding/subtracting fractions specifically:
+- Identify denominators from the user's fractions, pick the LCD, and explicitly rewrite each fraction to that LCD using the user's numbers.
+- You may show the combined form (e.g., \\(\\frac{2+3}{4}\\)), but STOP before evaluating the final arithmetic (e.g., do not compute \\(2+3\\)).
+
+Correctness & celebration:
+- Only celebrate when the student's step/answer is correct *and relevant to the current problem and your most recent question/sub-goal*.
+- If the student's message is correct but answers a different question than the current sub-goal, acknowledge it briefly ("You're right about X") and redirect back to the current sub-goal ("Here we need Y").
+- If the student gives a correct step or a correct final answer for the current sub-goal, explicitly celebrate it (short, genuine praise).
+- When celebrating, also briefly explain *why* it's correct (1-3 sentences) and offer the next small step or a quick extension question.
+- If the student gives an incorrect step/answer, be kind, say what's off at a high level, and give a hint + a guiding question (do not jump to the final result).
+- If the student provides the correct final answer, you may confirm and then provide a short solution summary (still concise).
+
+Conversation coherence:
+- Keep track of the current problem statement and your last question. Your next reply must address them directly.
+- Do not introduce new numbers, variables, or unrelated examples unless the user asked.
+
+Understanding checks:
+- After explaining a key concept or after a correct step, ask a brief check-for-understanding question.
+- Prefer lightweight checks: "Why does that work?", "What would you do next?", "Can you restate the rule in your own words?"
+- Occasionally use a tiny transfer question (a very similar 1-line example) to confirm understanding, but keep it short and optional.
+- If the student shows strong understanding, reduce the frequency of checks and move forward.
+
+Conversation so far:
+{history_text}
+
+Context:
+{context}
+
+Context sources (may be empty):
+{", ".join([s["label"] for s in sources]) if sources else ""}
+
+Latest user message:
+{question}
+
+Problem type hint:
+{problem_type}
+
+Response:
+"""
+
+    return _llm_invoke(prompt)
+
+
+def generate_mcq_quiz(concept: str, history: list[dict] | None = None) -> dict:
+    history_text = _format_history(history)
+    concept = (concept or "").strip() or "the concept from the conversation"
+    # Ground the quiz in the knowledge base if relevant.
+    context, _sources = retrieve_context(f"{concept}\n{history_text}".strip(), k=4, min_relevance=0.25)
+
+    prompt = f"""
+You are MentorBot, a tutor creating a short multiple-choice quiz.
+
+Goal:
+- Create exactly 5 questions to assess understanding of the concept.
+- Each question must have exactly 4 options labeled A, B, C, D.
+- Exactly one option must be correct.
+- Keep questions clear, unambiguous, and aligned to the concept.
+- Mix difficulty: 2 easy, 2 medium, 1 harder.
+
+Output format:
+- Return ONLY valid JSON (no markdown, no extra text).
+- Schema:
+{{
+  "title": "short quiz title",
+  "questions": [
+    {{
+      "id": "q1",
+      "question": "question text",
+      "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+      "correct": "A",
+      "explanation": "1-2 sentences why correct"
+    }}
+  ]
+}}
+
+Conversation (for context):
+{history_text}
+
+Concept:
+{concept}
+
+Context (use only if relevant):
+{context}
+""".strip()
+
+    raw = _llm_invoke(prompt)
+    try:
+        quiz = json.loads(raw)
+    except Exception:
+        repair_prompt = f"""
+Fix the following into ONLY valid JSON matching the exact schema above.
+Return ONLY JSON.
+
+Bad output:
+{raw}
+""".strip()
+        quiz = json.loads(_llm_invoke(repair_prompt))
+
+    if not isinstance(quiz, dict):
+        raise ValueError("Quiz output is not a JSON object.")
+
+    questions = quiz.get("questions")
+    if not isinstance(questions, list) or len(questions) != 5:
+        raise ValueError("Quiz must contain exactly 5 questions.")
+
+    for i, q in enumerate(questions, start=1):
+        if not isinstance(q, dict):
+            raise ValueError("Each question must be an object.")
+        qid = q.get("id")
+        if not isinstance(qid, str) or not qid.strip():
+            q["id"] = f"q{i}"
+
+        options = q.get("options")
+        if not isinstance(options, dict):
+            raise ValueError("Question options must be an object.")
+        for key in ("A", "B", "C", "D"):
+            if key not in options or not isinstance(options[key], str) or not options[key].strip():
+                raise ValueError("Each question must include options A, B, C, D as non-empty strings.")
+
+        correct = q.get("correct")
+        if correct not in ("A", "B", "C", "D"):
+            raise ValueError("Each question must include a valid correct option: A/B/C/D.")
+
+        explanation = q.get("explanation")
+        if not isinstance(explanation, str) or not explanation.strip():
+            q["explanation"] = "Correct because it matches the definition and rules of the concept."
+
+    if not isinstance(quiz.get("title"), str) or not quiz["title"].strip():
+        quiz["title"] = "Quick check"
+
+    return quiz
+
+
+def evaluate_answer(question, student_answer):
+    return _llm_invoke(
+        f"Question: {question}\nAnswer: {student_answer}\nEvaluate and give feedback."
+    )
+

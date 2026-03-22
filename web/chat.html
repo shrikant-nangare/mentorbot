@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MentorBot</title>
+
+    <link rel="icon" href="/static/logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/katex/katex.min.css" />
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">
+          <img src="/static/logo.svg" alt="MentorBot" />
+          <h1>MentorBot</h1>
+        </div>
+        <p class="hint">Enter to send · Shift+Enter for newline</p>
+      </header>
+
+      <div id="chat" class="chat" aria-live="polite" aria-busy="false"></div>
+
+      <div id="quizPanel" class="quizPanel" aria-live="polite">
+        <div class="quizHeader">
+          <h2 id="quizTitle">Quick check</h2>
+          <div class="quizActions">
+            <span id="quizStatus" class="hint"></span>
+            <button id="quizCloseBtn" class="btnSmall" type="button">Close</button>
+          </div>
+        </div>
+        <div id="quizBody" class="quizGrid"></div>
+        <div style="display:flex; gap:10px; margin-top: 12px;">
+          <button id="quizSubmitBtn" class="btnSmall" type="button">Submit</button>
+          <button id="quizRetryBtn" class="btnSmall" type="button" style="display:none;">New quiz</button>
+        </div>
+        <div id="quizResult" class="quizResult" style="display:none;"></div>
+      </div>
+
+      <div class="composer">
+        <textarea id="input" placeholder="Ask a question…"></textarea>
+        <button id="sendBtn" type="button">Send</button>
+      </div>
+
+      <div class="footer">
+        <div>
+          API: <code>POST /ask</code>
+          <span id="status" style="margin-left: 10px;"></span>
+          <span id="mathStatus" style="margin-left: 10px;"></span>
+        </div>
+        <div>
+          <button id="quizBtn" class="btnSmall" type="button" style="margin-right: 10px;">Quiz (5)</button>
+          <a href="/docs" style="color: rgba(255,255,255,0.75); text-decoration: none;">OpenAPI docs</a>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/katex/katex.min.js"></script>
+    <script src="/static/vendor/marked.min.js"></script>
+    <script src="/static/vendor/purify.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+
