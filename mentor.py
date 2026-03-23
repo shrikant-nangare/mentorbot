@@ -28,10 +28,8 @@ def _http_ok(url: str, method: str = "GET") -> bool:
 
 def ollama_is_reachable() -> bool:
     base = str(config.OLLAMA_BASE_URL).rstrip("/")
-    # Some non-Ollama servers may implement /api/tags; we also probe /api/embed existence.
-    tags_ok = _http_ok(f"{base}/api/tags", method="GET")
-    embed_probe_ok = _http_ok(f"{base}/api/embed", method="OPTIONS")
-    return bool(tags_ok and embed_probe_ok)
+    # Native Ollama reliably exposes GET /api/tags.
+    return _http_ok(f"{base}/api/tags", method="GET")
 
 
 def openai_completions_is_reachable() -> bool:

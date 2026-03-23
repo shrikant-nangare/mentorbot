@@ -1,5 +1,8 @@
 from pathlib import Path
+import base64
+import binascii
 import logging
+import secrets
 import time
 from uuid import uuid4
 
@@ -7,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.responses import PlainTextResponse
 
 import config
 from mentor import generate_mcq_quiz, get_vectordb, mentor_response
@@ -25,6 +29,49 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+# Basic auth middleware (protects all routes including static), with /health* open for probes.
+@app.middleware("http")
+async def basic_auth_middleware(request, call_next):
+    if not bool(getattr(config, "BASIC_AUTH_ENABLED", False)):
+        return await call_next(request)
+
+    path = str(getattr(request, "url", "").path or "")
+    if path.startswith("/health"):
+        return await call_next(request)
+
+    username = str(getattr(config, "BASIC_AUTH_USERNAME", "") or "")
+    password = str(getattr(config, "BASIC_AUTH_PASSWORD", "") or "")
+    if not username or not password:
+        return PlainTextResponse("Basic auth enabled but credentials not set.", status_code=500)
+
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("basic "):
+        return PlainTextResponse(
+            "Unauthorized",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="mentorbot", charset="UTF-8"'},
+        )
+
+    try:
+        b64 = auth.split(" ", 1)[1].strip()
+        decoded = base64.b64decode(b64.encode("utf-8"), validate=True).decode("utf-8")
+        supplied_user, supplied_pass = decoded.split(":", 1)
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return PlainTextResponse(
+            "Unauthorized",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="mentorbot", charset="UTF-8"'},
+        )
+
+    if not (secrets.compare_digest(supplied_user, username) and secrets.compare_digest(supplied_pass, password)):
+        return PlainTextResponse(
+            "Unauthorized",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="mentorbot", charset="UTF-8"'},
+        )
+
+    return await call_next(request)
 
 # quiz_id -> {"quiz": <quiz>, "created_at": <epoch_seconds>}
 QUIZ_STORE: dict[str, dict] = {}

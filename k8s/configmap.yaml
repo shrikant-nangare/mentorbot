@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mentorbot-config
+  namespace: mentorbot
+data:
+  # LLM server (llama.cpp OpenAI-compatible)
+  MENTORBOT_LLM_API_STYLE: "openai-completions"
+  MENTORBOT_LLM_BASE_URL: "http://192.168.1.215:8080"
+  MENTORBOT_LLM_MODEL: "ggml-org/gemma-3-1b-it-GGUF"
+  MENTORBOT_LLM_TIMEOUT_S: "60"
+
+  # Storage
+  MENTORBOT_DB_DIR: "/app/db"
+
+  # Retrieval defaults (safe even when retrieval degrades gracefully)
+  MENTORBOT_RETRIEVAL_K: "4"
+  MENTORBOT_RETRIEVAL_MIN_RELEVANCE: "0.25"
+

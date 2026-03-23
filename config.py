@@ -27,11 +27,30 @@ def _getenv_float(name: str, default: float) -> float:
         return default
 
 
+def _getenv_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    v = raw.strip().lower()
+    if v in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if v in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return default
+
+
 # Storage
 DB_DIR: str = _getenv_str("MENTORBOT_DB_DIR", "./db")
 
-# LLM (supports OpenAI-compatible completion servers like llama.cpp)
-LLM_API_STYLE: str = _getenv_str("MENTORBOT_LLM_API_STYLE", _getenv_str("LLM_API_STYLE", "openai-completions")).strip().lower()
+# Basic auth (HTTP Basic)
+BASIC_AUTH_ENABLED: bool = _getenv_bool("MENTORBOT_BASIC_AUTH_ENABLED", False)
+BASIC_AUTH_USERNAME: str = _getenv_str("MENTORBOT_BASIC_AUTH_USERNAME", "")
+BASIC_AUTH_PASSWORD: str = _getenv_str("MENTORBOT_BASIC_AUTH_PASSWORD", "")
+
+# LLM API style:
+# - "ollama": native Ollama API via langchain-ollama (default)
+# - "openai-completions": OpenAI-compatible /v1/completions servers (e.g. llama.cpp)
+LLM_API_STYLE: str = _getenv_str("MENTORBOT_LLM_API_STYLE", _getenv_str("LLM_API_STYLE", "ollama")).strip().lower()
 LLM_BASE_URL: str = _getenv_str("MENTORBOT_LLM_BASE_URL", _getenv_str("LLM_BASE_URL", "http://192.168.1.215:8080")).strip().rstrip("/")
 LLM_MODEL: str = _getenv_str(
     "MENTORBOT_LLM_MODEL",
@@ -43,8 +62,8 @@ LLM_TIMEOUT_S: float = _getenv_float("MENTORBOT_LLM_TIMEOUT_S", _getenv_float("L
 
 # Ollama models
 OLLAMA_EMBED_MODEL: str = _getenv_str("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-OLLAMA_LLM_MODEL: str = _getenv_str("OLLAMA_LLM_MODEL", "gpt-oss:latest")
-OLLAMA_LLM_FALLBACK_MODEL: str = _getenv_str("OLLAMA_LLM_FALLBACK_MODEL", "llama3:latest")
+OLLAMA_LLM_MODEL: str = _getenv_str("OLLAMA_LLM_MODEL", "gpt-oss:20b")
+OLLAMA_LLM_FALLBACK_MODEL: str = _getenv_str("OLLAMA_LLM_FALLBACK_MODEL", "gpt-oss:20b")
 
 # Preferred configuration: provide the full base URL, e.g. http://192.168.1.215:8080
 _OLLAMA_BASE_URL_ENV = _getenv_str("OLLAMA_BASE_URL", "")

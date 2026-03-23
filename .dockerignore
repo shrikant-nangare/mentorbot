@@ -1,0 +1,18 @@
+.git
+.gitignore
+.cursor
+.vscode
+.idea
+
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+
+*.log
+
+# Local runtime data (mount via volume in k8s)
+db/
+data/
+

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mentorbot
+  namespace: mentorbot
+  labels:
+    app.kubernetes.io/name: mentorbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mentorbot
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mentorbot
+    spec:
+      containers:
+        - name: mentorbot
+          # Docker Hub image
+          image: shrikantnangare/mentorbot:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: mentorbot-config
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+          volumeMounts:
+            - name: db
+              mountPath: /app/db
+      volumes:
+        - name: db
+          persistentVolumeClaim:
+            claimName: mentorbot-db
+
