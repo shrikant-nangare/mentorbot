@@ -2,8 +2,9 @@ import json
 import logging
 import math
 import re
-import socket
 from functools import lru_cache
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
@@ -13,21 +14,45 @@ import config
 logger = logging.getLogger(__name__)
 
 
-def ollama_is_reachable() -> bool:
+def _http_ok(url: str, method: str = "GET") -> bool:
     try:
-        with socket.create_connection(
-            (config.OLLAMA_HOST, int(config.OLLAMA_PORT)),
-            timeout=float(config.OLLAMA_CONNECT_TIMEOUT_S),
-        ):
-            return True
+        req = Request(url, headers={"Accept": "application/json"}, method=method)
+        with urlopen(req, timeout=float(config.OLLAMA_CONNECT_TIMEOUT_S)) as resp:
+            status = getattr(resp, "status", 200)
+            return 200 <= int(status) < 300
+    except (HTTPError, URLError, ValueError, TimeoutError):
+        return False
     except Exception:
         return False
+
+
+def ollama_is_reachable() -> bool:
+    base = str(config.OLLAMA_BASE_URL).rstrip("/")
+    # Some non-Ollama servers may implement /api/tags; we also probe /api/embed existence.
+    tags_ok = _http_ok(f"{base}/api/tags", method="GET")
+    embed_probe_ok = _http_ok(f"{base}/api/embed", method="OPTIONS")
+    return bool(tags_ok and embed_probe_ok)
+
+
+def openai_completions_is_reachable() -> bool:
+    base = str(config.LLM_BASE_URL).rstrip("/")
+    return _http_ok(f"{base}/v1/models", method="GET")
 
 
 def _ensure_ollama_reachable() -> None:
     if not ollama_is_reachable():
         raise RuntimeError(
-            f"Ollama is not reachable at {config.OLLAMA_HOST}:{config.OLLAMA_PORT}. Start it with `ollama serve`."
+            f"Ollama is not reachable at {config.OLLAMA_BASE_URL} ({config.OLLAMA_HOST}:{config.OLLAMA_PORT}). "
+            f"Make sure you're pointing at the Ollama server URL (it must expose /api/tags and /api/embed). "
+            f"If you're using Open WebUI (often :8080), the Ollama API is typically :11434."
+        )
+
+
+def _ensure_openai_completions_reachable() -> None:
+    if not openai_completions_is_reachable():
+        raise RuntimeError(
+            f"LLM server is not reachable at {config.LLM_BASE_URL}. "
+            f"For llama.cpp OpenAI-compatible mode this must expose GET /v1/models and POST /v1/completions."
         )
 
 
@@ -35,20 +60,20 @@ def _ensure_ollama_reachable() -> None:
 def get_vectordb() -> Chroma:
     return Chroma(
         persist_directory=config.DB_DIR,
-        embedding_function=OllamaEmbeddings(model=config.OLLAMA_EMBED_MODEL),
+        embedding_function=OllamaEmbeddings(model=config.OLLAMA_EMBED_MODEL, base_url=config.OLLAMA_BASE_URL),
     )
 
 
 @lru_cache(maxsize=1)
 def _get_llm_primary() -> OllamaLLM:
-    return OllamaLLM(model=config.OLLAMA_LLM_MODEL)
+    return OllamaLLM(model=config.OLLAMA_LLM_MODEL, base_url=config.OLLAMA_BASE_URL)
 
 
 @lru_cache(maxsize=1)
 def _get_llm_fallback() -> OllamaLLM:
     if config.OLLAMA_LLM_FALLBACK_MODEL == config.OLLAMA_LLM_MODEL:
         return _get_llm_primary()
-    return OllamaLLM(model=config.OLLAMA_LLM_FALLBACK_MODEL)
+    return OllamaLLM(model=config.OLLAMA_LLM_FALLBACK_MODEL, base_url=config.OLLAMA_BASE_URL)
 
 
 def _normalize_text_for_chat(text: str) -> str:
@@ -72,7 +97,35 @@ def _normalize_text_for_chat(text: str) -> str:
     return t
 
 
+def _invoke_openai_completions(prompt: str) -> str:
+    _ensure_openai_completions_reachable()
+    url = f"{str(config.LLM_BASE_URL).rstrip('/')}/v1/completions"
+    payload = {
+        "model": config.LLM_MODEL,
+        "prompt": prompt,
+        "max_tokens": int(config.LLM_MAX_TOKENS),
+        "temperature": float(config.LLM_TEMPERATURE),
+    }
+    req = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    with urlopen(req, timeout=float(config.LLM_TIMEOUT_S)) as resp:
+        raw = resp.read().decode("utf-8")
+    data = json.loads(raw or "{}")
+    choices = data.get("choices") or []
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError(f"Unexpected /v1/completions response: {data}")
+    return str(choices[0].get("text", "") or "")
+
+
 def _llm_invoke(prompt: str) -> str:
+    style = (config.LLM_API_STYLE or "").strip().lower()
+    if style in {"openai-completions", "openai", "llamacpp"}:
+        return _normalize_text_for_chat(_invoke_openai_completions(prompt))
+
     try:
         _ensure_ollama_reachable()
         return _normalize_text_for_chat(_get_llm_primary().invoke(prompt))
@@ -123,15 +176,9 @@ def retrieve_context(query: str, k: int = 4, min_relevance: float = 0.25) -> tup
             sources.append({"label": label, "relevance": float(score)})
             context_chunks.append(f"[{label} | relevance={float(score):.2f}]\n{text}")
     except Exception:
-        # Fallback to basic similarity search if relevance scores aren't available
-        hits = get_vectordb().similarity_search(query, k=max(1, min(2, k)))
-        for doc in hits:
-            label = _doc_source_label(getattr(doc, "metadata", None))
-            text = (getattr(doc, "page_content", "") or "").strip()
-            if not text:
-                continue
-            sources.append({"label": label, "relevance": None})
-            context_chunks.append(f"[{label}]\n{text}")
+        # If embeddings/backend isn't available (common with completion-only servers),
+        # degrade gracefully by returning no retrieval context.
+        return ("", [])
 
     return ("\n\n---\n\n".join(context_chunks), sources)
 

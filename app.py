@@ -77,9 +77,14 @@ def health():
 @app.get("/health/models")
 def health_models():
     return {
+        "llmApiStyle": getattr(config, "LLM_API_STYLE", None),
+        "llmBaseUrl": getattr(config, "LLM_BASE_URL", None),
+        "llmModel": getattr(config, "LLM_MODEL", None),
+        "llmTimeoutS": getattr(config, "LLM_TIMEOUT_S", None),
         "ollamaEmbedModel": config.OLLAMA_EMBED_MODEL,
         "ollamaLlmModel": config.OLLAMA_LLM_MODEL,
         "ollamaLlmFallbackModel": config.OLLAMA_LLM_FALLBACK_MODEL,
+        "ollamaBaseUrl": getattr(config, "OLLAMA_BASE_URL", None),
         "dbDir": config.DB_DIR,
     }
 

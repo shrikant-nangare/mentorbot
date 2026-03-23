@@ -5,7 +5,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 
-DB_DIR = "./db"
+import config
 
 
 def ingest_pdfs(folder_path="data"):
@@ -37,8 +37,8 @@ def ingest_pdfs(folder_path="data"):
 
     # Create vector DB
     vectordb = Chroma(
-        persist_directory=DB_DIR,
-        embedding_function=OllamaEmbeddings(model="nomic-embed-text")
+        persist_directory=config.DB_DIR,
+        embedding_function=OllamaEmbeddings(model=config.OLLAMA_EMBED_MODEL, base_url=config.OLLAMA_BASE_URL)
     )
 
     vectordb.add_documents(split_docs)
