@@ -450,6 +450,10 @@ def _is_explain_request(question: str) -> bool:
     return False
 
 
+def is_explain_request(question: str) -> bool:
+    return _is_explain_request(question)
+
+
 def _infer_problem_type(question: str) -> str:
     q = (question or "").lower()
     has_fraction = bool(re.search(r"\d+\s*/\s*\d+", q))
@@ -667,9 +671,12 @@ Response:
     return _llm_invoke(prompt)
 
 
-def generate_mcq_quiz(concept: str, history: list[dict] | None = None) -> dict:
+def generate_mcq_quiz(concept: str, history: list[dict] | None = None, difficulty: str = "medium") -> dict:
     history_text = _format_history(history)
     concept = (concept or "").strip() or "the concept from the conversation"
+    difficulty = (difficulty or "medium").strip().lower()
+    if difficulty not in {"easy", "medium", "hard"}:
+        difficulty = "medium"
     # Ground the quiz in the knowledge base if relevant.
     context, _sources = retrieve_context(f"{concept}\n{history_text}".strip(), k=4, min_relevance=0.25)
 
@@ -682,6 +689,12 @@ Goal:
 - Exactly one option must be correct.
 - Keep questions clear, unambiguous, and aligned to the concept.
 - Mix difficulty: 2 easy, 2 medium, 1 harder.
+
+Difficulty target:
+- Overall target difficulty: {difficulty}
+- If target is easy: keep wording simple and prefer direct definition/recognition questions.
+- If target is medium: include 1–2 application questions.
+- If target is hard: include more "why/how" and tricky distractors, still unambiguous.
 
 Output format:
 - Return ONLY valid JSON (no markdown, no extra text).
@@ -761,4 +774,68 @@ def evaluate_answer(question, student_answer):
     return _llm_invoke(
         f"Question: {question}\nAnswer: {student_answer}\nEvaluate and give feedback."
     )
+
+
+def suggest_topics(subject: str, grade: int, last_concept: str, history: list[dict] | None = None) -> list[str]:
+    """
+    Returns 3-5 suggested next topics for the student.
+    Best-effort: uses the LLM, but falls back to simple heuristics.
+    """
+    subj = (subject or "").strip().lower() or "maths"
+    g = int(grade or 1)
+    concept = (last_concept or "").strip()
+    history_text = _format_history(history)
+
+    fallback: dict[str, list[str]] = {
+        "maths": ["Place value", "Fractions practice", "Decimals", "Word problems", "Geometry basics"],
+        "english": ["Nouns and verbs", "Reading comprehension", "Sentence structure", "Punctuation", "Vocabulary"],
+        "science": ["States of matter", "Forces and motion", "Ecosystems", "Electricity", "Scientific method"],
+        "social_studies": ["Maps and directions", "Communities", "Civics basics", "World regions", "History timeline"],
+        "social studies": ["Maps and directions", "Communities", "Civics basics", "World regions", "History timeline"],
+        "spellings": ["Common patterns", "Sight words", "Prefixes and suffixes", "Homophones", "Weekly word list"],
+    }
+
+    if not concept:
+        return fallback.get(subj, ["Review", "Practice quiz", "Next lesson"])[:4]
+
+    prompt = f"""
+You are MentorBot, helping plan what the student should learn next.
+
+Subject: {subj}
+Grade: {g}
+Last concept: {concept}
+
+Conversation context (may be empty):
+{history_text}
+
+Return ONLY valid JSON:
+{{
+  "topics": ["topic 1", "topic 2", "topic 3", "topic 4"]
+}}
+
+Rules:
+- 4 topics
+- Grade-appropriate
+- Closely related to the last concept
+- Short labels (2-6 words each)
+""".strip()
+
+    try:
+        raw = _llm_invoke(prompt)
+        data = json.loads(raw or "{}")
+        topics = data.get("topics") if isinstance(data, dict) else None
+        if isinstance(topics, list):
+            cleaned = []
+            for t in topics:
+                s = str(t or "").strip()
+                if s:
+                    cleaned.append(s[:60])
+            if cleaned:
+                return cleaned[:5]
+    except Exception:
+        pass
+
+    # Fallback: keep a couple generic progressions
+    base = fallback.get(subj, ["Review", "Practice", "Next lesson"])
+    return base[:4]
 

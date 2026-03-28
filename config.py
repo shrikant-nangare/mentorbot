@@ -76,6 +76,10 @@ def _getenv_duration_s(name: str, default_seconds: int) -> int:
 # Storage
 DB_DIR: str = _getenv_str("MENTORBOT_DB_DIR", "./db")
 
+# Application DB (students, quizzes, notes, groups, reports)
+APP_DB_PATH: str = _getenv_str("MENTORBOT_APP_DB_PATH", f"{DB_DIR.rstrip('/')}/mentorbot-app.sqlite3")
+SESSION_TTL_S: int = _getenv_duration_s("MENTORBOT_SESSION_TTL", 7 * 24 * 60 * 60)  # 7 days
+
 # Persistent cache (stored on DB_DIR/PVC by default)
 CACHE_ENABLED: bool = _getenv_bool("MENTORBOT_CACHE_ENABLED", True)
 CACHE_TTL_S: int = _getenv_int("MENTORBOT_CACHE_TTL_S", 7 * 24 * 60 * 60)  # 7 days
@@ -171,4 +175,8 @@ RETRIEVAL_MIN_RELEVANCE: float = _getenv_float("MENTORBOT_RETRIEVAL_MIN_RELEVANC
 HISTORY_MAX_MESSAGES: int = _getenv_int("MENTORBOT_HISTORY_MAX_MESSAGES", 24)
 
 # Quizzes
-QUIZ_PASS_PERCENT: float = _getenv_float("MENTORBOT_QUIZ_PASS_PERCENT", 60.0)
+QUIZ_PASS_PERCENT: float = _getenv_float("MENTORBOT_QUIZ_PASS_PERCENT", 70.0)
+QUIZ_SKIP_PER_DAY: int = _getenv_int("MENTORBOT_QUIZ_SKIP_PER_DAY", 5)
+
+# Parent/Admin PIN (optional bootstrap; if unset, can be set in UI)
+PARENT_PIN: str = _getenv_str("MENTORBOT_PARENT_PIN", "")

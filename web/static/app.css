@@ -26,6 +26,150 @@ body {
   padding: 24px;
 }
 
+.authScreen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(12px);
+  z-index: 50;
+}
+
+.authCard {
+  width: min(980px, 100%);
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.03));
+  border-radius: 18px;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+  padding: 18px;
+}
+
+.authHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.profilesGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.profileCard {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(0,0,0,0.18);
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.profileCard:hover {
+  transform: translateY(-1px);
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(0,0,0,0.22);
+}
+
+.avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  box-shadow: 0 18px 40px rgba(0,0,0,0.35);
+  margin-bottom: 10px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.profileName {
+  font-weight: 700;
+  font-size: 13px;
+  color: rgba(255,255,255,0.92);
+  margin: 0 0 4px 0;
+}
+
+.profileMeta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(12px);
+}
+
+.modalCard {
+  width: min(760px, 100%);
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.03));
+  border-radius: 18px;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+  padding: 18px;
+}
+
+.modalBody {
+  margin-top: 12px;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(0,0,0,0.16);
+}
+
+.textInput {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.20);
+  color: var(--text);
+  outline: none;
+  font-size: 13px;
+}
+
+.textInput:focus { border-color: rgba(125, 211, 252, 0.45); }
+
+body[data-wallpaper^="space"] {
+  background: radial-gradient(1000px 700px at 20% 0%, rgba(56, 189, 248, 0.20) 0%, transparent 58%),
+              radial-gradient(900px 600px at 80% 35%, rgba(52, 211, 153, 0.16) 0%, transparent 55%),
+              radial-gradient(500px 400px at 60% 85%, rgba(251, 113, 133, 0.12) 0%, transparent 55%),
+              linear-gradient(180deg, #070a16, #0b1020);
+}
+
+body[data-wallpaper^="landscape"] {
+  background: radial-gradient(1000px 700px at 20% 0%, rgba(34, 197, 94, 0.22) 0%, transparent 60%),
+              radial-gradient(900px 600px at 80% 35%, rgba(59, 130, 246, 0.14) 0%, transparent 55%),
+              linear-gradient(180deg, #06151a, #071620);
+}
+
+body[data-wallpaper^="school"] {
+  background: radial-gradient(1000px 700px at 20% 0%, rgba(251, 191, 36, 0.18) 0%, transparent 62%),
+              radial-gradient(900px 600px at 80% 35%, rgba(56, 189, 248, 0.14) 0%, transparent 55%),
+              linear-gradient(180deg, #0b1020, #0a1228);
+}
+
+body[data-wallpaper^="plain"] {
+  background: var(--bg);
+}
+
 .shell {
   width: min(980px, 100%);
   height: min(760px, calc(100vh - 48px));
@@ -46,6 +190,65 @@ header {
   align-items: baseline;
   gap: 12px;
 }
+
+.topBar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(0,0,0,0.18);
+}
+
+.tabBtn {
+  height: 30px;
+  padding: 0 10px;
+  min-width: auto;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.86);
+}
+
+.tabBtn.active {
+  border-color: rgba(125, 211, 252, 0.45);
+  background: rgba(125, 211, 252, 0.16);
+  color: rgba(255,255,255,0.94);
+}
+
+.gradeBox {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(0,0,0,0.18);
+}
+
+.selectInput {
+  height: 30px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.92);
+  padding: 0 8px;
+  outline: none;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.selectInput:focus { border-color: rgba(125, 211, 252, 0.45); }
 
 header .brand {
   display: flex;

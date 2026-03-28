@@ -37,6 +37,11 @@ dist/
 # Logs
 *.log
 
+# Local app data (PVC-backed in k8s; never commit)
+db/*.sqlite3
+db/**/*.sqlite3
+db/**/*.bin
+
 # Env files (keep examples)
 .env
 .env.*

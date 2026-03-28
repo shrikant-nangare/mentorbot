@@ -1,20 +1,55 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="MentorBot logo">
   <defs>
-    <radialGradient id="g" cx="30%" cy="25%" r="80%">
-      <stop offset="0%" stop-color="#7dd3fc" stop-opacity="1"/>
-      <stop offset="55%" stop-color="#34d399" stop-opacity="0.95"/>
+    <radialGradient id="bg" cx="28%" cy="20%" r="90%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="1"/>
+      <stop offset="45%" stop-color="#34d399" stop-opacity="0.95"/>
       <stop offset="100%" stop-color="#0b1020" stop-opacity="1"/>
     </radialGradient>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.45"/>
+    <radialGradient id="glow" cx="50%" cy="34%" r="55%">
+      <stop offset="0%" stop-color="#fff7d6" stop-opacity="1"/>
+      <stop offset="60%" stop-color="#fbbf24" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#f97316" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="inner" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="blur"/>
+      <feOffset dx="0" dy="2" result="offsetBlur"/>
+      <feComposite in="SourceGraphic" in2="offsetBlur" operator="arithmetic" k2="1" k3="-0.8"/>
     </filter>
   </defs>
 
-  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#g)" filter="url(#shadow)"/>
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#bg)" filter="url(#shadow)"/>
   <rect x="28" y="28" width="200" height="200" rx="48" fill="none" stroke="rgba(255,255,255,0.16)" stroke-width="2"/>
 
-  <g fill="rgba(255,255,255,0.92)">
-    <path d="M68 164V92h18l22 38 22-38h18v72h-16v-44l-18 31h-12l-18-31v44H68z"/>
-    <path d="M166 164V92h28c9 0 16 2 21 6s7 10 7 17c0 5-2 10-6 13 6 3 9 8 9 15 0 7-3 12-8 16s-13 5-22 5h-29zm16-42h12c5 0 9-1 11-2s3-4 3-7-1-6-3-7-6-2-11-2h-12v18zm0 30h13c6 0 10-1 12-2s4-4 4-8-1-6-4-8-7-2-12-2h-13v20z"/>
+  <!-- Light burst -->
+  <g opacity="0.95">
+    <circle cx="128" cy="92" r="74" fill="url(#glow)"/>
+  </g>
+
+  <!-- Bulb -->
+  <g filter="url(#inner)">
+    <path d="M128 62c-28.7 0-52 22.4-52 50 0 18.8 10.8 35.2 26.6 43.8 6.2 3.4 9.4 9.4 9.4 16v6h32v-6c0-6.6 3.2-12.6 9.4-16C169.2 147.2 180 130.8 180 112c0-27.6-23.3-50-52-50z"
+          fill="rgba(255,255,255,0.92)"/>
+    <path d="M108 184h40c3.3 0 6 2.7 6 6s-2.7 6-6 6h-40c-3.3 0-6-2.7-6-6s2.7-6 6-6z"
+          fill="rgba(255,255,255,0.90)"/>
+    <path d="M112 202h32c3.3 0 6 2.7 6 6s-2.7 6-6 6h-32c-3.3 0-6-2.7-6-6s2.7-6 6-6z"
+          fill="rgba(255,255,255,0.86)"/>
+  </g>
+
+  <!-- Filament -->
+  <path d="M112 120c10 10 22 10 32 0"
+        fill="none" stroke="rgba(11,16,32,0.85)" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Rays -->
+  <g stroke="rgba(255,255,255,0.85)" stroke-width="6" stroke-linecap="round" opacity="0.75">
+    <path d="M128 44v-10"/>
+    <path d="M90 56l-7-7"/>
+    <path d="M166 56l7-7"/>
+    <path d="M72 92H62"/>
+    <path d="M194 92h10"/>
+    <path d="M90 128l-7 7"/>
+    <path d="M166 128l7 7"/>
   </g>
 </svg>

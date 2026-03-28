@@ -10,13 +10,177 @@
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
+    <div id="authScreen" class="authScreen" style="display:none;" aria-live="polite">
+      <div class="authCard">
+        <div class="authHeader">
+          <div class="brand">
+            <img src="/static/logo.svg" alt="MentorBot" />
+            <h1>MentorBot</h1>
+          </div>
+          <button id="parentBtn" class="btnSmall" type="button">Parent</button>
+        </div>
+
+        <p class="hint" style="margin: 0 0 12px 0;">
+          Pick your profile to begin.
+        </p>
+
+        <div id="profilesGrid" class="profilesGrid"></div>
+
+        <div id="authStatus" class="hint" style="margin-top: 12px;"></div>
+      </div>
+    </div>
+
+    <div id="parentModal" class="modal" style="display:none;" aria-live="polite">
+      <div class="modalCard">
+        <div style="display:flex; justify-content: space-between; align-items: center; gap: 12px;">
+          <h2 style="margin:0; font-size:14px;">Parent view</h2>
+          <button id="parentCloseBtn" class="btnSmall" type="button">Close</button>
+        </div>
+
+        <div class="modalBody">
+          <div class="panel">
+            <div class="hint" style="margin-bottom: 6px;">Parent PIN</div>
+            <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <input id="parentPinInput" class="textInput" type="password" inputmode="numeric" placeholder="Enter parent PIN" />
+              <button id="parentLoginBtn" class="btnSmall" type="button">Login</button>
+              <button id="parentSetPinBtn" class="btnSmall" type="button">Set PIN (first time)</button>
+            </div>
+            <div id="parentAuthStatus" class="hint" style="margin-top: 8px;"></div>
+          </div>
+
+          <div class="panel" style="margin-top: 12px;">
+            <div class="hint" style="margin-bottom: 6px;">Import roster (CSV)</div>
+            <div class="hint" style="margin-bottom: 8px;">
+              Header example: <code>pseudonym,grade,avatarKey,wallpaperKey,subjectPref</code>
+            </div>
+            <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <input id="rosterFile" type="file" accept=".csv,text/csv" />
+              <button id="rosterUploadBtn" class="btnSmall" type="button">Upload</button>
+            </div>
+            <div id="rosterStatus" class="hint" style="margin-top: 8px;"></div>
+          </div>
+
+          <div class="panel" style="margin-top: 12px;">
+            <div class="hint" style="margin-bottom: 6px;">Parent reports</div>
+            <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <select id="reportStudentSelect" class="selectInput" aria-label="Student"></select>
+              <select id="reportDaysSelect" class="selectInput" aria-label="Days">
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+              </select>
+              <button id="reportRunBtn" class="btnSmall" type="button">Generate</button>
+            </div>
+            <div id="reportOut" class="quizResult" style="display:none; margin-top: 10px;"></div>
+          </div>
+
+          <div class="panel" style="margin-top: 12px;">
+            <div class="hint" style="margin-bottom: 6px;">Reset student PIN</div>
+            <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <select id="pinStudentSelect" class="selectInput" aria-label="Student"></select>
+              <input id="pinNewValue" class="textInput" type="password" inputmode="numeric" placeholder="New PIN (optional)" />
+              <button id="pinResetBtn" class="btnSmall" type="button">Reset</button>
+              <button id="pinClearBtn" class="btnSmall" type="button">Clear</button>
+            </div>
+            <div id="pinResetStatus" class="hint" style="margin-top: 8px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="notesModal" class="modal" style="display:none;" aria-live="polite">
+      <div class="modalCard">
+        <div style="display:flex; justify-content: space-between; align-items: center; gap: 12px;">
+          <h2 style="margin:0; font-size:14px;">Notes</h2>
+          <button id="notesCloseBtn" class="btnSmall" type="button">Close</button>
+        </div>
+
+        <div class="modalBody">
+          <div class="panel">
+            <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <input id="noteTitle" class="textInput" type="text" placeholder="Title" />
+              <button id="noteSaveBtn" class="btnSmall" type="button">Save note</button>
+              <button id="noteRefreshBtn" class="btnSmall" type="button">Refresh</button>
+            </div>
+            <textarea id="noteBody" style="margin-top:10px; width:100%; min-height: 120px;" placeholder="Write your notes…"></textarea>
+            <div id="notesStatus" class="hint" style="margin-top: 8px;"></div>
+          </div>
+
+          <div class="panel" style="margin-top: 12px;">
+            <div class="hint" style="margin-bottom: 6px;">Recent notes</div>
+            <div id="notesList" style="display:grid; gap:8px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="groupsModal" class="modal" style="display:none;" aria-live="polite">
+      <div class="modalCard">
+        <div style="display:flex; justify-content: space-between; align-items: center; gap: 12px;">
+          <h2 style="margin:0; font-size:14px;">Groups</h2>
+          <button id="groupsCloseBtn" class="btnSmall" type="button">Close</button>
+        </div>
+
+        <div class="modalBody">
+          <div class="panel">
+            <div class="hint" style="margin-bottom: 6px;">Join by invite code</div>
+            <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <input id="groupInviteInput" class="textInput" type="text" placeholder="Invite code" />
+              <button id="groupJoinBtn" class="btnSmall" type="button">Join</button>
+            </div>
+            <div class="hint" style="margin-top: 10px; margin-bottom: 6px;">Create a new group</div>
+            <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <input id="groupNameInput" class="textInput" type="text" placeholder="Group name" />
+              <button id="groupCreateBtn" class="btnSmall" type="button">Create</button>
+            </div>
+            <div id="groupsStatus" class="hint" style="margin-top: 8px;"></div>
+          </div>
+
+          <div class="panel" style="margin-top: 12px;">
+            <div class="hint" style="margin-bottom: 6px;">My groups</div>
+            <div id="groupsList" style="display:grid; gap:8px;"></div>
+          </div>
+
+          <div class="panel" style="margin-top: 12px;">
+            <div class="hint" style="margin-bottom: 6px;">Group chat</div>
+            <div id="groupChat" style="border:1px solid rgba(255,255,255,0.14); border-radius: 12px; padding: 10px; height: 220px; overflow:auto; background: rgba(0,0,0,0.14);"></div>
+            <div style="display:flex; gap: 10px; margin-top: 10px;">
+              <input id="groupChatInput" class="textInput" type="text" placeholder="Message…" style="flex:1;" />
+              <button id="groupSendBtn" class="btnSmall" type="button">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="shell">
       <header>
         <div class="brand">
           <img src="/static/logo.svg" alt="MentorBot" />
           <h1>MentorBot</h1>
         </div>
-        <p class="hint">Enter to send · Shift+Enter for newline</p>
+        <div style="display:flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+          <p class="hint" style="margin:0;">Enter to send · Shift+Enter for newline</p>
+          <div class="topBar">
+            <div id="subjectTabs" class="tabs" role="tablist" aria-label="Subjects">
+              <button class="tabBtn" data-subject="maths" type="button">Maths</button>
+              <button class="tabBtn" data-subject="english" type="button">English</button>
+              <button class="tabBtn" data-subject="science" type="button">Science</button>
+              <button class="tabBtn" data-subject="social_studies" type="button">Social studies</button>
+              <button class="tabBtn" data-subject="spellings" type="button">Spellings</button>
+            </div>
+            <div class="gradeBox">
+              <span class="hint" style="margin:0;">Grade</span>
+              <select id="gradeSelect" class="selectInput" aria-label="Grade">
+                <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+                <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
+                <option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+              </select>
+            </div>
+            <button id="notesBtn" class="btnSmall" type="button">Notes</button>
+            <button id="groupsBtn" class="btnSmall" type="button">Groups</button>
+          </div>
+        </div>
       </header>
 
       <div id="chat" class="chat" aria-live="polite" aria-busy="false"></div>
@@ -32,6 +196,7 @@
         <div id="quizBody" class="quizGrid"></div>
         <div style="display:flex; gap:10px; margin-top: 12px;">
           <button id="quizSubmitBtn" class="btnSmall" type="button">Submit</button>
+          <button id="quizSkipBtn" class="btnSmall" type="button">Skip</button>
           <button id="quizRetryBtn" class="btnSmall" type="button" style="display:none;">New quiz</button>
         </div>
         <div id="quizResult" class="quizResult" style="display:none;"></div>
