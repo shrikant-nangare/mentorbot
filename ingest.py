@@ -36,9 +36,19 @@ def ingest_pdfs(folder_path="data"):
     print(f"✂️ Split into {len(split_docs)} chunks")
 
     # Create vector DB
+    embed_kwargs = {
+        "model": config.OLLAMA_EMBED_MODEL,
+        "base_url": config.OLLAMA_BASE_URL,
+        "keep_alive": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0) or 0),
+    }
+    # If you switch embeddings to an OpenAI-compatible endpoint, update ingest.py similarly
+    # or run ingestion through the app path.
+    num_ctx = int(getattr(config, "OLLAMA_NUM_CTX", 0) or 0)
+    if num_ctx > 0:
+        embed_kwargs["num_ctx"] = num_ctx
     vectordb = Chroma(
         persist_directory=config.DB_DIR,
-        embedding_function=OllamaEmbeddings(model=config.OLLAMA_EMBED_MODEL, base_url=config.OLLAMA_BASE_URL)
+        embedding_function=OllamaEmbeddings(**embed_kwargs)
     )
 
     vectordb.add_documents(split_docs)

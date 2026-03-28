@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import re
+import hashlib
 from functools import lru_cache
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -10,17 +11,55 @@ from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 
 import config
+from persistent_cache import CacheConfig, SqliteCache
+from openai_compat_embeddings import OpenAICompatEmbeddings
 
 logger = logging.getLogger(__name__)
+
+_CACHE: SqliteCache | None = None
+
+
+def _get_cache() -> SqliteCache | None:
+    global _CACHE
+    if not bool(getattr(config, "CACHE_ENABLED", False)):
+        return None
+    if _CACHE is not None:
+        return _CACHE
+    try:
+        _CACHE = SqliteCache(
+            CacheConfig(
+                path=str(getattr(config, "CACHE_PATH", "")),
+                ttl_s=int(getattr(config, "CACHE_TTL_S", 0)),
+                max_entries=int(getattr(config, "CACHE_MAX_ENTRIES", 0)),
+            )
+        )
+    except Exception:
+        _CACHE = None
+    return _CACHE
+
+
+def _cache_key(prefix: str, payload: dict) -> str:
+    body = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    h = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    return f"{prefix}:{h}"
 
 
 def _http_ok(url: str, method: str = "GET") -> bool:
     try:
-        req = Request(url, headers={"Accept": "application/json"}, method=method)
+        headers = {"Accept": "application/json"}
+        api_key = str(getattr(config, "LLM_API_KEY", "") or "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        req = Request(url, headers=headers, method=method)
         with urlopen(req, timeout=float(config.OLLAMA_CONNECT_TIMEOUT_S)) as resp:
             status = getattr(resp, "status", 200)
             return 200 <= int(status) < 300
-    except (HTTPError, URLError, ValueError, TimeoutError):
+    except HTTPError as e:
+        # If an endpoint requires auth, a 401/403 still proves reachability.
+        if int(getattr(e, "code", 0)) in {401, 403}:
+            return True
+        return False
+    except (URLError, ValueError, TimeoutError):
         return False
     except Exception:
         return False
@@ -34,6 +73,8 @@ def ollama_is_reachable() -> bool:
 
 def openai_completions_is_reachable() -> bool:
     base = str(config.LLM_BASE_URL).rstrip("/")
+    if base.endswith("/v1"):
+        return _http_ok(f"{base}/models", method="GET")
     return _http_ok(f"{base}/v1/models", method="GET")
 
 
@@ -47,6 +88,12 @@ def _ensure_ollama_reachable() -> None:
 
 
 def _ensure_openai_completions_reachable() -> None:
+    # For OpenAI/OpenRouter base URLs, "reachability" without a key often returns 401/403.
+    # Provide a clearer error in that case.
+    base = str(getattr(config, "LLM_BASE_URL", "") or "").strip()
+    if ("api.openai.com" in base or "openrouter.ai" in base) and not str(getattr(config, "LLM_API_KEY", "") or "").strip():
+        raise RuntimeError("OpenAI/OpenRouter API key is not configured (set OPENAI_API_KEY or MENTORBOT_LLM_API_KEY).")
+
     if not openai_completions_is_reachable():
         raise RuntimeError(
             f"LLM server is not reachable at {config.LLM_BASE_URL}. "
@@ -54,24 +101,123 @@ def _ensure_openai_completions_reachable() -> None:
         )
 
 
+def _openai_headers() -> dict[str, str]:
+    headers: dict[str, str] = {"Content-Type": "application/json", "Accept": "application/json"}
+    api_key = str(getattr(config, "LLM_API_KEY", "") or "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    # OpenRouter-specific optional metadata headers (safe for other providers too).
+    site = str(getattr(config, "OPENROUTER_SITE_URL", "") or "").strip()
+    title = str(getattr(config, "OPENROUTER_APP_NAME", "") or "").strip()
+    if site:
+        headers["HTTP-Referer"] = site
+    if title:
+        headers["X-Title"] = title
+    return headers
+
+
+def _invoke_openai_chat(prompt: str) -> str:
+    """
+    OpenAI-compatible chat completion endpoint.
+    Works with OpenRouter when base_url is https://openrouter.ai/api/v1.
+    """
+    if not str(getattr(config, "LLM_API_KEY", "") or "").strip():
+        raise RuntimeError("OpenAI API key is not configured (set OPENAI_API_KEY or MENTORBOT_LLM_API_KEY).")
+
+    base = str(config.LLM_BASE_URL).rstrip("/")
+    url = f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+    payload = {
+        "model": config.LLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": float(config.LLM_TEMPERATURE),
+    }
+    max_tokens = int(config.LLM_MAX_TOKENS)
+    # Some OpenAI models require max_completion_tokens instead of max_tokens.
+    if "api.openai.com" in base.lower():
+        payload["max_completion_tokens"] = max_tokens
+    else:
+        payload["max_tokens"] = max_tokens
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=_openai_headers(), method="POST")
+    try:
+        with urlopen(req, timeout=float(config.LLM_TIMEOUT_S)) as resp:
+            raw = resp.read().decode("utf-8")
+    except HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenAI chat request failed ({e.code}): {body}") from None
+    data = json.loads(raw or "{}")
+    choices = data.get("choices") or []
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError(f"Unexpected /v1/chat/completions response: {data}")
+    msg = choices[0].get("message") or {}
+    content = msg.get("content", "")
+    return str(content or "")
+
+
 @lru_cache(maxsize=1)
 def get_vectordb() -> Chroma:
+    emb_style = str(getattr(config, "EMBEDDINGS_API_STYLE", "") or "").strip().lower()
+    if emb_style in {"openai-embeddings", "openrouter-embeddings"}:
+        base_url = (getattr(config, "EMBEDDINGS_BASE_URL", "") or getattr(config, "LLM_BASE_URL", "")).rstrip("/")
+        api_key = str(getattr(config, "EMBEDDINGS_API_KEY", "") or getattr(config, "LLM_API_KEY", "")).strip()
+        embedding_function = OpenAICompatEmbeddings(
+            base_url=base_url,
+            api_key=api_key,
+            model=str(getattr(config, "EMBEDDINGS_MODEL", "text-embedding-3-small") or "text-embedding-3-small"),
+            timeout_s=float(getattr(config, "LLM_TIMEOUT_S", 30.0)),
+            extra_headers={
+                "HTTP-Referer": str(getattr(config, "OPENROUTER_SITE_URL", "") or ""),
+                "X-Title": str(getattr(config, "OPENROUTER_APP_NAME", "") or ""),
+            },
+        )
+    else:
+        embed_kwargs = {
+            "model": config.OLLAMA_EMBED_MODEL,
+            "base_url": config.OLLAMA_BASE_URL,
+            "keep_alive": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0) or 0),
+        }
+        num_ctx = int(getattr(config, "OLLAMA_NUM_CTX", 0) or 0)
+        if num_ctx > 0:
+            embed_kwargs["num_ctx"] = num_ctx
+        embedding_function = OllamaEmbeddings(**embed_kwargs)
     return Chroma(
         persist_directory=config.DB_DIR,
-        embedding_function=OllamaEmbeddings(model=config.OLLAMA_EMBED_MODEL, base_url=config.OLLAMA_BASE_URL),
+        embedding_function=embedding_function,
     )
 
 
 @lru_cache(maxsize=1)
 def _get_llm_primary() -> OllamaLLM:
-    return OllamaLLM(model=config.OLLAMA_LLM_MODEL, base_url=config.OLLAMA_BASE_URL)
+    llm_kwargs = {
+        "model": config.OLLAMA_LLM_MODEL,
+        "base_url": config.OLLAMA_BASE_URL,
+        "keep_alive": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0) or 0),
+    }
+    num_ctx = int(getattr(config, "OLLAMA_NUM_CTX", 0) or 0)
+    num_predict = int(getattr(config, "OLLAMA_NUM_PREDICT", 0) or 0)
+    if num_ctx > 0:
+        llm_kwargs["num_ctx"] = num_ctx
+    if num_predict > 0:
+        llm_kwargs["num_predict"] = num_predict
+    return OllamaLLM(**llm_kwargs)
 
 
 @lru_cache(maxsize=1)
 def _get_llm_fallback() -> OllamaLLM:
     if config.OLLAMA_LLM_FALLBACK_MODEL == config.OLLAMA_LLM_MODEL:
         return _get_llm_primary()
-    return OllamaLLM(model=config.OLLAMA_LLM_FALLBACK_MODEL, base_url=config.OLLAMA_BASE_URL)
+    llm_kwargs = {
+        "model": config.OLLAMA_LLM_FALLBACK_MODEL,
+        "base_url": config.OLLAMA_BASE_URL,
+        "keep_alive": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0) or 0),
+    }
+    num_ctx = int(getattr(config, "OLLAMA_NUM_CTX", 0) or 0)
+    num_predict = int(getattr(config, "OLLAMA_NUM_PREDICT", 0) or 0)
+    if num_ctx > 0:
+        llm_kwargs["num_ctx"] = num_ctx
+    if num_predict > 0:
+        llm_kwargs["num_predict"] = num_predict
+    return OllamaLLM(**llm_kwargs)
 
 
 def _normalize_text_for_chat(text: str) -> str:
@@ -97,7 +243,8 @@ def _normalize_text_for_chat(text: str) -> str:
 
 def _invoke_openai_completions(prompt: str) -> str:
     _ensure_openai_completions_reachable()
-    url = f"{str(config.LLM_BASE_URL).rstrip('/')}/v1/completions"
+    base = str(config.LLM_BASE_URL).rstrip("/")
+    url = f"{base}/completions" if base.endswith("/v1") else f"{base}/v1/completions"
     payload = {
         "model": config.LLM_MODEL,
         "prompt": prompt,
@@ -107,7 +254,7 @@ def _invoke_openai_completions(prompt: str) -> str:
     req = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers=_openai_headers(),
         method="POST",
     )
     with urlopen(req, timeout=float(config.LLM_TIMEOUT_S)) as resp:
@@ -120,13 +267,68 @@ def _invoke_openai_completions(prompt: str) -> str:
 
 
 def _llm_invoke(prompt: str) -> str:
+    cache = _get_cache()
+    key: str | None = None
+    if cache is not None:
+        key = _cache_key(
+            "llm",
+            {
+                "style": str(getattr(config, "LLM_API_STYLE", "")),
+                "prompt": prompt,
+                "ollama_base_url": str(getattr(config, "OLLAMA_BASE_URL", "")),
+                "ollama_model": str(getattr(config, "OLLAMA_LLM_MODEL", "")),
+                "ollama_keep_alive_s": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0)),
+                "ollama_num_ctx": int(getattr(config, "OLLAMA_NUM_CTX", 0)),
+                "ollama_num_predict": int(getattr(config, "OLLAMA_NUM_PREDICT", 0)),
+                "openai_base_url": str(getattr(config, "LLM_BASE_URL", "")),
+                "openai_model": str(getattr(config, "LLM_MODEL", "")),
+            },
+        )
+        hit = cache.get(key)
+        if hit is not None:
+            hit_text = str(hit)
+            # Never serve cached empty responses; treat as a bad entry.
+            if not hit_text.strip():
+                try:
+                    cache.delete(key)
+                except Exception:
+                    pass
+            else:
+                return hit_text
+
     style = (config.LLM_API_STYLE or "").strip().lower()
+    if style in {"openai-chat", "openrouter"}:
+        out = _normalize_text_for_chat(_invoke_openai_chat(prompt))
+        if not out.strip():
+            out = _normalize_text_for_chat(_invoke_openai_chat(prompt))
+        if not out.strip():
+            raise RuntimeError("LLM returned an empty response.")
+        if cache is not None and key is not None:
+            cache.set(key, out)
+        return out
+
     if style in {"openai-completions", "openai", "llamacpp"}:
-        return _normalize_text_for_chat(_invoke_openai_completions(prompt))
+        out = _normalize_text_for_chat(_invoke_openai_completions(prompt))
+        if not out.strip():
+            # One retry in case the backend produced an empty completion.
+            out = _normalize_text_for_chat(_invoke_openai_completions(prompt))
+        if not out.strip():
+            raise RuntimeError("LLM returned an empty response.")
+        if cache is not None and key is not None:
+            cache.set(key, out)
+        return out
 
     try:
         _ensure_ollama_reachable()
-        return _normalize_text_for_chat(_get_llm_primary().invoke(prompt))
+        out = _normalize_text_for_chat(_get_llm_primary().invoke(prompt))
+        if not out.strip():
+            # One retry in case the backend produced an empty completion.
+            out = _normalize_text_for_chat(_get_llm_primary().invoke(prompt))
+        if not out.strip():
+            raise RuntimeError("LLM returned an empty response.")
+        if cache is not None and key is not None:
+            cache.set(key, out)
+        return out
     except Exception as e:
         msg = str(e).lower()
         model_missing = ("model" in msg and ("not found" in msg or "pull" in msg or "unknown" in msg))
@@ -136,7 +338,14 @@ def _llm_invoke(prompt: str) -> str:
                 extra={"primary_model": config.OLLAMA_LLM_MODEL, "fallback_model": config.OLLAMA_LLM_FALLBACK_MODEL},
             )
             _ensure_ollama_reachable()
-            return _normalize_text_for_chat(_get_llm_fallback().invoke(prompt))
+            out = _normalize_text_for_chat(_get_llm_fallback().invoke(prompt))
+            if not out.strip():
+                out = _normalize_text_for_chat(_get_llm_fallback().invoke(prompt))
+            if not out.strip():
+                raise RuntimeError("LLM returned an empty response.")
+            if cache is not None and key is not None:
+                cache.set(key, out)
+            return out
         raise
 
 
@@ -161,6 +370,23 @@ def retrieve_context(query: str, k: int = 4, min_relevance: float = 0.25) -> tup
     sources: list[dict] = []
     context_chunks: list[str] = []
 
+    cache = _get_cache() if bool(getattr(config, "CACHE_RETRIEVAL_ENABLED", True)) else None
+    if cache is not None:
+        rkey = _cache_key(
+            "retrieval",
+            {
+                "query": query,
+                "k": int(k),
+                "min_relevance": float(min_relevance),
+                "db_dir": str(config.DB_DIR),
+                "embed_model": str(config.OLLAMA_EMBED_MODEL),
+                "ollama_base_url": str(config.OLLAMA_BASE_URL),
+            },
+        )
+        cached = cache.get_json(rkey)
+        if isinstance(cached, dict) and isinstance(cached.get("context"), str) and isinstance(cached.get("sources"), list):
+            return (str(cached["context"]), list(cached["sources"]))
+
     try:
         hits = get_vectordb().similarity_search_with_relevance_scores(query, k=k)
         # hits: list[tuple[Document, float]] where score is higher = more relevant (0..1)
@@ -178,7 +404,10 @@ def retrieve_context(query: str, k: int = 4, min_relevance: float = 0.25) -> tup
         # degrade gracefully by returning no retrieval context.
         return ("", [])
 
-    return ("\n\n---\n\n".join(context_chunks), sources)
+    context_text = "\n\n---\n\n".join(context_chunks)
+    if cache is not None:
+        cache.set_json(rkey, {"context": context_text, "sources": sources})
+    return (context_text, sources)
 
 
 def _format_history(history: list[dict] | None) -> str:
