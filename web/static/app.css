@@ -261,6 +261,79 @@ html[data-theme="dark"] body[data-wallpaper^="plain"] {
   backdrop-filter: blur(10px);
 }
 
+/* Dark theme legibility: ensure panels/cards are dark too */
+html[data-theme="dark"] .shell {
+  background: linear-gradient(180deg, rgba(0,0,0,0.34), rgba(0,0,0,0.20));
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+}
+
+html[data-theme="dark"] .chat {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+html[data-theme="dark"] .panel {
+  background: rgba(0, 0, 0, 0.16);
+}
+
+html[data-theme="dark"] .authCard,
+html[data-theme="dark"] .modalCard {
+  background: linear-gradient(180deg, rgba(0,0,0,0.34), rgba(0,0,0,0.20));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.60);
+}
+
+html[data-theme="dark"] .profileCard {
+  background: rgba(0,0,0,0.18);
+}
+
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] .textInput,
+html[data-theme="dark"] .selectInput {
+  background: rgba(0, 0, 0, 0.20);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .gradeBox {
+  background: rgba(0,0,0,0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .shell,
+  html[data-theme="auto"] .shell {
+    background: linear-gradient(180deg, rgba(0,0,0,0.34), rgba(0,0,0,0.20));
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  }
+  html:not([data-theme]) .chat,
+  html[data-theme="auto"] .chat {
+    background: rgba(0, 0, 0, 0.18);
+  }
+  html:not([data-theme]) .panel,
+  html[data-theme="auto"] .panel {
+    background: rgba(0, 0, 0, 0.16);
+  }
+  html:not([data-theme]) .authCard,
+  html[data-theme="auto"] .authCard,
+  html:not([data-theme]) .modalCard,
+  html[data-theme="auto"] .modalCard {
+    background: linear-gradient(180deg, rgba(0,0,0,0.34), rgba(0,0,0,0.20));
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.60);
+  }
+  html:not([data-theme]) textarea,
+  html[data-theme="auto"] textarea,
+  html:not([data-theme]) .textInput,
+  html[data-theme="auto"] .textInput,
+  html:not([data-theme]) .selectInput,
+  html[data-theme="auto"] .selectInput {
+    background: rgba(0, 0, 0, 0.20);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: var(--text);
+  }
+  html:not([data-theme]) .gradeBox,
+  html[data-theme="auto"] .gradeBox {
+    background: rgba(0,0,0,0.18);
+  }
+}
+
 header {
   display: flex;
   justify-content: space-between;
