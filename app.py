@@ -46,10 +46,16 @@ if str(getattr(config, "PARENT_PIN", "") or "").strip() and not _APP_DB.parent_p
 
 
 def _get_bearer_token(request: Request) -> str:
+    # IMPORTANT: When HTTP Basic Auth is enabled, the Authorization header is used for Basic,
+    # so session tokens must not rely on Authorization or they will conflict.
+    # Prefer X-Mentorbot-Session for app sessions, but keep Bearer as fallback.
+    token = str(request.headers.get("x-mentorbot-session", "") or "").strip()
+    if token:
+        return token
     auth = str(request.headers.get("authorization", "") or "").strip()
-    if not auth.lower().startswith("bearer "):
-        return ""
-    return auth.split(" ", 1)[1].strip()
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return ""
 
 
 def _require_student(request: Request) -> str:

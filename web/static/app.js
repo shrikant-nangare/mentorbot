@@ -137,13 +137,13 @@
 
   function authHeaders(extra) {
     const h = Object.assign({}, extra || {});
-    if (sessionToken) h.Authorization = `Bearer ${sessionToken}`;
+    if (sessionToken) h['X-Mentorbot-Session'] = sessionToken;
     return h;
   }
 
   function parentHeaders(extra) {
     const h = Object.assign({}, extra || {});
-    if (parentToken) h.Authorization = `Bearer ${parentToken}`;
+    if (parentToken) h['X-Mentorbot-Session'] = parentToken;
     return h;
   }
 
