@@ -7,6 +7,8 @@ import time
 from uuid import uuid4
 import csv
 import io
+import os
+import sys
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -264,6 +266,30 @@ def chat_ui():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/health/app")
+def health_app():
+    routes = []
+    group_routes = []
+    for r in getattr(app, "routes", []) or []:
+        path = getattr(r, "path", None)
+        if not isinstance(path, str):
+            continue
+        routes.append(path)
+        if path.startswith("/groups") or path.startswith("/ws/groups"):
+            group_routes.append(path)
+    routes_set = sorted(set(routes))
+    group_routes_set = sorted(set(group_routes))
+    return {
+        "ok": True,
+        "appFile": __file__,
+        "cwd": os.getcwd(),
+        "python": sys.version.split()[0],
+        "routesCount": len(routes_set),
+        "hasGroupsRoutes": bool(group_routes_set),
+        "groupsRoutes": group_routes_set,
+    }
 
 
 @app.get("/health/models")
