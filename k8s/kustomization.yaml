@@ -7,5 +7,6 @@ resources:
   - configmap.yaml
   - deployment.yaml
   - service.yaml
-  # - ingress.yaml
+  - ingress.yaml
+  - ingress-portal.yaml
 

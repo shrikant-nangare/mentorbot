@@ -4,12 +4,12 @@ metadata:
   name: mentorbot
   namespace: mentorbot
   annotations:
-    # For nginx ingress controller (adjust if you use something else)
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
 spec:
+  ingressClassName: nginx
   rules:
-    - host: mentorbot.local
+    - host: mentorbot.aiklox.com
       http:
         paths:
           - path: /
@@ -19,4 +19,8 @@ spec:
                 name: mentorbot
                 port:
                   name: http
+  tls:
+    - hosts:
+        - mentorbot.aiklox.com
+      secretName: aiklox-tls
 
