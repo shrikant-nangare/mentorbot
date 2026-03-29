@@ -329,7 +329,7 @@ def ask(request: Request, q: Question):
 
     try:
         history = [{"role": m.role, "content": m.content} for m in q.history]
-        answer = mentor_response(q.question, history=history)
+        answer = mentor_response(q.question, history=history, subject=subject, grade=grade)
         quiz_required = bool(is_explain_request(q.question))
         concept_id: str | None = None
         if quiz_required:
@@ -396,7 +396,7 @@ def quiz_generate(request: Request, req: QuizGenerateRequest):
         difficulty = "easy"
 
     try:
-        quiz = generate_mcq_quiz(concept=concept, history=history, difficulty=difficulty)
+        quiz = generate_mcq_quiz(concept=concept, history=history, difficulty=difficulty, subject=subject, grade=grade)
     except TypeError:
         # Backward compatibility if generate_mcq_quiz doesn't accept difficulty yet.
         quiz = generate_mcq_quiz(concept=concept, history=history)
