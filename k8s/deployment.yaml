@@ -27,7 +27,11 @@ spec:
             - configMapRef:
                 name: mentorbot-config
             - secretRef:
-                name: mentorbot-basic-auth
+                name: mentorbot-openrouter
+                optional: true
+            - secretRef:
+                name: mentorbot-openai
+                optional: true
           readinessProbe:
             httpGet:
               path: /health
