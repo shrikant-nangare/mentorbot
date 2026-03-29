@@ -26,6 +26,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: mentorbot-config
+            - secretRef:
+                name: mentorbot-basic-auth
           readinessProbe:
             httpGet:
               path: /health
