@@ -219,33 +219,6 @@ header {
   justify-content: flex-end;
 }
 
-.tabs {
-  display: flex;
-  gap: 6px;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: rgba(0,0,0,0.18);
-}
-
-.tabBtn {
-  height: 30px;
-  padding: 0 10px;
-  min-width: auto;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 700;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(255,255,255,0.06);
-  color: rgba(255,255,255,0.86);
-}
-
-.tabBtn.active {
-  border-color: rgba(125, 211, 252, 0.45);
-  background: rgba(125, 211, 252, 0.16);
-  color: rgba(255,255,255,0.94);
-}
-
 .gradeBox {
   display: flex;
   gap: 8px;

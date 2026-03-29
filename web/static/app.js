@@ -42,7 +42,6 @@
   const quizRetryBtn = document.getElementById('quizRetryBtn');
   const quizResult = document.getElementById('quizResult');
 
-  const subjectTabs = document.getElementById('subjectTabs');
   const gradeSelect = document.getElementById('gradeSelect');
   const notesBtn = document.getElementById('notesBtn');
   const notesModal = document.getElementById('notesModal');
@@ -76,14 +75,9 @@
   let gateSubject = 'maths';
   let gateGrade = 1;
 
-  function setActiveSubject(subj) {
+  function setActiveSubjectImplicit(subj) {
     const s = String(subj || 'maths').toLowerCase();
     gateSubject = s;
-    if (!subjectTabs) return;
-    const btns = subjectTabs.querySelectorAll('.tabBtn');
-    btns.forEach((b) => {
-      b.classList.toggle('active', String(b.dataset.subject || '') === s);
-    });
   }
 
   function setGrade(g) {
@@ -98,7 +92,7 @@
       await fetch('/me', {
         method: 'PATCH',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ grade: gateGrade, subjectPref: gateSubject })
+        body: JSON.stringify({ grade: gateGrade })
       });
     } catch (_) {}
   }
@@ -221,7 +215,6 @@
       currentProfile = data && data.profile ? data.profile : null;
       if (currentProfile) {
         setWallpaper(currentProfile.wallpaperKey || 'space_01');
-        setActiveSubject(currentProfile.subjectPref || 'maths');
         setGrade(currentProfile.grade || 1);
         return true;
       }
@@ -256,7 +249,6 @@
       localStorage.setItem('mb_session_token', sessionToken);
       currentProfile = data.profile || null;
       setWallpaper((currentProfile && currentProfile.wallpaperKey) ? currentProfile.wallpaperKey : 'space_01');
-      setActiveSubject((currentProfile && currentProfile.subjectPref) ? currentProfile.subjectPref : 'maths');
       setGrade((currentProfile && currentProfile.grade) ? currentProfile.grade : (student.grade || 1));
       showAuth(false);
       addMessage('system', 'Welcome', `Hi ${currentProfile && currentProfile.pseudonym ? currentProfile.pseudonym : 'student'}!`);
@@ -280,7 +272,6 @@
     localStorage.setItem('mb_session_token', sessionToken);
     currentProfile = data.profile || null;
     setWallpaper((currentProfile && currentProfile.wallpaperKey) ? currentProfile.wallpaperKey : 'space_01');
-    setActiveSubject((currentProfile && currentProfile.subjectPref) ? currentProfile.subjectPref : 'maths');
     setGrade((currentProfile && currentProfile.grade) ? currentProfile.grade : (student.grade || 1));
     showAuth(false);
     addMessage('system', 'Welcome', `Hi ${currentProfile && currentProfile.pseudonym ? currentProfile.pseudonym : 'student'}!`);
@@ -683,7 +674,7 @@
       const resp = await fetch('/ask', {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ question, history, subject: gateSubject, grade: gateGrade })
+        body: JSON.stringify({ question, history, grade: gateGrade })
       });
 
       if (!resp.ok) {
@@ -695,6 +686,9 @@
       const answer = (data && data.answer) ? data.answer : '(empty response)';
       addMessage('bot', 'MentorBot', answer);
       pushHistory('assistant', answer);
+      if (data && data.subject) {
+        setActiveSubjectImplicit(data.subject);
+      }
       if (data && Array.isArray(data.suggestedTopics) && data.suggestedTopics.length) {
         addTopicChips(data.suggestedTopics);
       }
@@ -720,16 +714,6 @@
   if (quizSkipBtn) quizSkipBtn.addEventListener('click', skipQuiz);
   quizCloseBtn.addEventListener('click', () => showQuizPanel(false));
   quizRetryBtn.addEventListener('click', generateQuiz);
-
-  if (subjectTabs) {
-    subjectTabs.addEventListener('click', (e) => {
-      const btn = e.target && e.target.closest ? e.target.closest('.tabBtn') : null;
-      if (!btn) return;
-      const subj = String(btn.dataset.subject || 'maths');
-      setActiveSubject(subj);
-      persistProfilePrefs();
-    });
-  }
 
   if (gradeSelect) {
     gradeSelect.addEventListener('change', () => {

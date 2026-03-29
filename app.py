@@ -68,6 +68,82 @@ def _require_parent(request: Request) -> str:
     return str(sess[1])
 
 
+def _infer_subject_from_text(text: str) -> str:
+    t = (text or "").strip().lower()
+    if not t:
+        return "maths"
+
+    # Spellings
+    if any(k in t for k in ["spell", "spelling", "syllable", "phonics", "sound it out"]):
+        return "spellings"
+
+    # English / language arts
+    if any(
+        k in t
+        for k in [
+            "noun",
+            "verb",
+            "adjective",
+            "adverb",
+            "grammar",
+            "punctuation",
+            "sentence",
+            "paragraph",
+            "synonym",
+            "antonym",
+            "reading",
+            "comprehension",
+        ]
+    ):
+        return "english"
+
+    # Science
+    if any(
+        k in t
+        for k in [
+            "photosynthesis",
+            "atom",
+            "molecule",
+            "cell",
+            "energy",
+            "force",
+            "gravity",
+            "electricity",
+            "ecosystem",
+            "experiment",
+            "chemical",
+            "evaporation",
+            "condensation",
+        ]
+    ):
+        return "science"
+
+    # Social studies / social science
+    if any(
+        k in t
+        for k in [
+            "history",
+            "geography",
+            "map",
+            "continent",
+            "country",
+            "capital",
+            "government",
+            "civics",
+            "constitution",
+            "democracy",
+            "community",
+            "culture",
+            "war",
+            "timeline",
+        ]
+    ):
+        return "social_studies"
+
+    # Default
+    return "maths"
+
+
 def _require_student_token(token: str) -> str:
     t = str(token or "").strip()
     sess = _APP_DB.verify_session(t)
@@ -324,8 +400,8 @@ def ask(request: Request, q: Question):
     if not student:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    subject = (q.subject or student.get("subjectPref") or "maths").strip().lower()
     grade = int(q.grade or student.get("grade") or 1)
+    subject = _infer_subject_from_text(q.question)
 
     try:
         history = [{"role": m.role, "content": m.content} for m in q.history]
@@ -360,19 +436,22 @@ def quiz_generate(request: Request, req: QuizGenerateRequest):
     if not student:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    subject = (req.subject or student.get("subjectPref") or "maths").strip().lower()
-    grade = int(req.grade or student.get("grade") or 1)
-
     concept_id = (req.conceptId or "").strip() or _APP_DB.get_latest_pending_concept_id(student_id)
     if not concept_id:
         # Fallback: create a concept from the current context, so the quiz still has a progression anchor.
         concept_text = (req.concept or "the current concept from the conversation").strip()
+        subject = _infer_subject_from_text(concept_text)
+        grade = int(req.grade or student.get("grade") or 1)
         concept_id = _APP_DB.create_concept(
             student_id=student_id,
             subject=subject,
             grade=grade,
             concept_text=concept_text,
         )
+    else:
+        meta = _APP_DB.get_concept_meta(student_id=student_id, concept_id=concept_id)
+        grade = int((meta or {}).get("grade") or req.grade or student.get("grade") or 1)
+        subject = str((meta or {}).get("subject") or _infer_subject_from_text(req.concept or "")).strip().lower() or "maths"
 
     history = [{"role": m.role, "content": m.content} for m in req.history]
     concept = (req.concept or "").strip()

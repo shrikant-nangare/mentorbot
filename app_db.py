@@ -676,6 +676,35 @@ class AppDb:
             finally:
                 conn.close()
 
+    def get_concept_meta(self, student_id: str, concept_id: str) -> dict[str, Any] | None:
+        sid = str(student_id or "").strip()
+        cid = str(concept_id or "").strip()
+        if not sid or not cid:
+            return None
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                r = conn.execute(
+                    """
+                    SELECT id, subject, grade, concept_text, status, created_at
+                    FROM concepts
+                    WHERE id = ? AND student_id = ?
+                    """,
+                    (cid, sid),
+                ).fetchone()
+                if not r:
+                    return None
+                return {
+                    "id": str(r["id"]),
+                    "subject": str(r["subject"]),
+                    "grade": int(r["grade"]),
+                    "conceptText": str(r["concept_text"]),
+                    "status": str(r["status"]),
+                    "createdAt": int(r["created_at"]),
+                }
+            finally:
+                conn.close()
+
     def add_attempt(
         self,
         *,
