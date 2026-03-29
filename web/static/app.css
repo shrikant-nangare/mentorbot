@@ -11,8 +11,20 @@
   --danger: #e11d48;
 }
 
+html[data-theme="dark"] {
+  --bg: #0b1020;
+  --panel: rgba(255, 255, 255, 0.06);
+  --panel2: rgba(255, 255, 255, 0.10);
+  --text: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.70);
+  --border: rgba(255, 255, 255, 0.14);
+  --user: #7dd3fc;
+  --bot: #a7f3d0;
+  --danger: #fb7185;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  html:not([data-theme]), html[data-theme="auto"] {
     --bg: #0b1020;
     --panel: rgba(255, 255, 255, 0.06);
     --panel2: rgba(255, 255, 255, 0.10);

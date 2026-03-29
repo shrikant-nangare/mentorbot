@@ -43,6 +43,7 @@
   const quizResult = document.getElementById('quizResult');
 
   const gradeSelect = document.getElementById('gradeSelect');
+  const themeBtn = document.getElementById('themeBtn');
   const notesBtn = document.getElementById('notesBtn');
   const notesModal = document.getElementById('notesModal');
   const notesCloseBtn = document.getElementById('notesCloseBtn');
@@ -74,6 +75,23 @@
   let gateConceptId = '';
   let gateSubject = 'maths';
   let gateGrade = 1;
+
+  function applyTheme(mode) {
+    const m = String(mode || 'auto').toLowerCase();
+    const val = (m === 'light' || m === 'dark' || m === 'auto') ? m : 'auto';
+    document.documentElement.dataset.theme = val;
+    localStorage.setItem('mb_theme', val);
+    if (themeBtn) themeBtn.textContent = `Theme: ${val[0].toUpperCase()}${val.slice(1)}`;
+  }
+
+  function cycleTheme() {
+    const current = String(localStorage.getItem('mb_theme') || 'auto').toLowerCase();
+    const next = current === 'auto' ? 'light' : (current === 'light' ? 'dark' : 'auto');
+    applyTheme(next);
+  }
+
+  // Init theme early (before rendering)
+  applyTheme(localStorage.getItem('mb_theme') || 'auto');
 
   function setActiveSubjectImplicit(subj) {
     const s = String(subj || 'maths').toLowerCase();
@@ -720,6 +738,10 @@
       setGrade(gradeSelect.value);
       persistProfilePrefs();
     });
+  }
+
+  if (themeBtn) {
+    themeBtn.addEventListener('click', cycleTheme);
   }
 
   if (parentBtn) parentBtn.addEventListener('click', () => showParentModal(true));
