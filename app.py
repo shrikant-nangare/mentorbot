@@ -1,7 +1,9 @@
 from pathlib import Path
 import base64
 import binascii
+import json
 import logging
+import re
 import secrets
 import time
 from uuid import uuid4
@@ -9,15 +11,32 @@ import csv
 import io
 import os
 import sys
+import warnings
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.responses import PlainTextResponse
 
+# Silence a noisy dependency warning when running on Python 3.14+ locally.
+# (Production container uses Python 3.12.)
+warnings.filterwarnings(
+    "ignore",
+    message=r"Core Pydantic V1 functionality isn't compatible with Python 3\.14 or greater\.",
+    category=UserWarning,
+)
+
 import config
-from mentor import generate_mcq_quiz, get_vectordb, is_explain_request, mentor_response, suggest_topics
+from mentor import (
+    classify_subject,
+    generate_mcq_quiz,
+    get_vectordb,
+    group_study_explanation,
+    is_explain_request,
+    mentor_response,
+    suggest_topics,
+)
 from app_db import AppDb, AppDbConfig
 from security import hash_pin, verify_pin
 
@@ -74,9 +93,63 @@ def _require_parent(request: Request) -> str:
     return str(sess[1])
 
 
-def _infer_subject_from_text(text: str) -> str:
+def _infer_subject_from_text(text: str, *, default_subject: str = "maths") -> str:
     t = (text or "").strip().lower()
     if not t:
+        d = str(default_subject or "").strip().lower() or "maths"
+        return d if d in {"maths", "english", "science", "social_studies", "spellings"} else "maths"
+
+    # Explicit override: "English: ...", "Science: ..."
+    m = re.match(r"^\s*(math|maths|english|science|spellings|social studies|social_studies|history|geography)\s*:\s*", t)
+    if m:
+        k = str(m.group(1) or "").strip().lower()
+        if k in {"math", "maths"}:
+            return "maths"
+        if k in {"social studies", "social_studies", "history", "geography"}:
+            return "social_studies"
+        return k
+
+    # Maths (explicit detection so we don't fall back to a non-maths default)
+    # If the user included digits/operators or common maths keywords, treat it as maths.
+    if re.search(r"\d", t) and re.search(r"[\+\-\*/=^]|\b(solve|equation|simplify|factor)\b", t):
+        return "maths"
+    if any(
+        k in t
+        for k in [
+            "fraction",
+            "fractions",
+            "numerator",
+            "denominator",
+            "decimal",
+            "decimals",
+            "percent",
+            "percentage",
+            "ratio",
+            "proportion",
+            "algebra",
+            "variable",
+            "equation",
+            "inequality",
+            "simplify",
+            "expand",
+            "factor",
+            "multiply",
+            "division",
+            "divide",
+            "addition",
+            "add",
+            "subtraction",
+            "subtract",
+            "geometry",
+            "angle",
+            "angles",
+            "perimeter",
+            "area",
+            "volume",
+            "graph",
+            "coordinate",
+        ]
+    ):
         return "maths"
 
     # Spellings
@@ -99,6 +172,18 @@ def _infer_subject_from_text(text: str) -> str:
             "antonym",
             "reading",
             "comprehension",
+            "pronoun",
+            "preposition",
+            "conjunction",
+            "metaphor",
+            "simile",
+            "alliteration",
+            "theme",
+            "character",
+            "plot",
+            "essay",
+            "poem",
+            "book report",
         ]
     ):
         return "english"
@@ -120,6 +205,15 @@ def _infer_subject_from_text(text: str) -> str:
             "chemical",
             "evaporation",
             "condensation",
+            "water cycle",
+            "weather",
+            "planet",
+            "solar system",
+            "moon",
+            "dna",
+            "bacteria",
+            "virus",
+            "climate",
         ]
     ):
         return "science"
@@ -142,12 +236,29 @@ def _infer_subject_from_text(text: str) -> str:
             "culture",
             "war",
             "timeline",
+            "president",
+            "prime minister",
+            "election",
+            "parliament",
+            "revolution",
+            "independence",
+            "empire",
+            "ancient",
+            "medieval",
         ]
     ):
         return "social_studies"
 
-    # Default
-    return "maths"
+    # Ambiguous: ask the LLM to classify (best-effort), then fall back.
+    try:
+        guessed = classify_subject(text)
+        if guessed:
+            return guessed
+    except Exception:
+        pass
+
+    d = str(default_subject or "").strip().lower() or "maths"
+    return d if d in {"maths", "english", "science", "social_studies", "spellings"} else "maths"
 
 
 def _require_student_token(token: str) -> str:
@@ -161,25 +272,35 @@ def _require_student_token(token: str) -> str:
 class _GroupHub:
     def __init__(self):
         self._lock = threading.Lock()
-        self._conns: dict[str, set[WebSocket]] = {}
+        # group_id -> { websocket -> student_id }
+        self._conns: dict[str, dict[WebSocket, str]] = {}
 
-    async def join(self, group_id: str, ws: WebSocket) -> None:
+    async def join(self, group_id: str, ws: WebSocket, *, student_id: str) -> None:
         await ws.accept()
         with self._lock:
-            self._conns.setdefault(group_id, set()).add(ws)
+            self._conns.setdefault(group_id, {})[ws] = str(student_id)
 
-    def leave(self, group_id: str, ws: WebSocket) -> None:
+    def leave(self, group_id: str, ws: WebSocket) -> str | None:
         with self._lock:
-            s = self._conns.get(group_id)
-            if not s:
-                return
-            s.discard(ws)
-            if not s:
+            m = self._conns.get(group_id)
+            if not m:
+                return None
+            sid = m.pop(ws, None)
+            if not m:
                 self._conns.pop(group_id, None)
+            return sid
+
+    def participants(self, group_id: str) -> set[str]:
+        with self._lock:
+            m = self._conns.get(group_id) or {}
+            return set(str(sid) for sid in m.values() if str(sid).strip())
+
+    def participant_count(self, group_id: str) -> int:
+        return len(self.participants(group_id))
 
     async def broadcast(self, group_id: str, payload: dict) -> None:
         with self._lock:
-            conns = list(self._conns.get(group_id, set()))
+            conns = list((self._conns.get(group_id) or {}).keys())
         for ws in conns:
             try:
                 await ws.send_json(payload)
@@ -190,6 +311,104 @@ class _GroupHub:
 import threading
 
 _GROUP_HUB = _GroupHub()
+
+_CHAT_LOG_LOCK = threading.Lock()
+
+
+def _day_str(ts: int) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(int(ts)))
+
+
+_GREETING_RE = re.compile(
+    r"^\s*(hi|hello|hey|hiya|yo|sup|howdy|good\s+morning|good\s+afternoon|good\s+evening)\s*[!.?]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_greeting(text: str) -> bool:
+    t = str(text or "").strip()
+    if not t:
+        return True
+    return bool(_GREETING_RE.match(t))
+
+
+def _is_meta_or_app_usage(text: str) -> bool:
+    t = str(text or "").strip().lower()
+    if not t:
+        return True
+    meta_keywords = [
+        "mentorbot",
+        "who are you",
+        "what are you",
+        "what can you do",
+        "help me use",
+        "how to use",
+        "login",
+        "sign in",
+        "sign up",
+        "pin",
+        "password",
+        "parent",
+        "admin",
+        "roster",
+        "upload",
+        "csv",
+        "group",
+        "invite code",
+        "notes",
+        "theme",
+        "wallpaper",
+        "avatar",
+        "report",
+        "dashboard",
+        "cluster",
+        "kubernetes",
+        "docker",
+        "argocd",
+    ]
+    return any(k in t for k in meta_keywords)
+
+
+def _should_suggest_topics(text: str) -> bool:
+    t = str(text or "").strip()
+    if not t:
+        return False
+    if _is_greeting(t) or _is_meta_or_app_usage(t):
+        return False
+
+    tl = t.lower()
+    # Avoid suggestions for very short / vague prompts.
+    if len(tl) < 10:
+        return False
+
+    if "?" in tl:
+        return True
+
+    # Allow non-question prompts that still look like a real maths/exercise request.
+    if re.search(r"\b(explain|solve|find|calculate|simplify|factor|expand|prove|derive|convert|compare)\b", tl):
+        return True
+    if re.search(r"[\d\+\-\*/=]", tl):
+        return True
+    if re.search(r"\b(fraction|fractions|decimal|decimals|percent|percentage|algebra|equation|angle|triangle|graph|mean|median|mode)\b", tl):
+        return True
+
+    return False
+
+
+def _append_daily_chat_log(payload: dict) -> None:
+    if not bool(getattr(config, "CHAT_LOG_ENABLED", True)):
+        return
+    log_dir = str(getattr(config, "CHAT_LOG_DIR", "") or "").strip() or str(Path(config.DB_DIR) / "chat_logs")
+    day = str(payload.get("day") or "").strip()
+    if not day:
+        day = _day_str(int(payload.get("createdAt") or int(time.time())))
+        payload["day"] = day
+    os.makedirs(log_dir, exist_ok=True)
+    p = Path(log_dir) / f"{day}.jsonl"
+    line = json.dumps(payload, ensure_ascii=False)
+    with _CHAT_LOG_LOCK:
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
 # Basic auth middleware (protects all routes including static), with /health* open for probes.
 @app.middleware("http")
@@ -399,6 +618,13 @@ def health_vectordb():
         raise HTTPException(status_code=503, detail=f"vectordb unavailable: {e}")
 
 
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+@app.get("/apple-touch-icon-precomposed.png", include_in_schema=False)
+def apple_touch_icon():
+    # Some browsers request these by default. We don't ship PNG icons, so redirect to the SVG logo.
+    return RedirectResponse(url="/static/logo.svg")
+
+
 @app.post("/ask")
 def ask(request: Request, q: Question):
     student_id = _require_student(request)
@@ -407,10 +633,39 @@ def ask(request: Request, q: Question):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     grade = int(q.grade or student.get("grade") or 1)
-    subject = _infer_subject_from_text(q.question)
+    subject_pref = str(student.get("subjectPref") or "").strip().lower() or "maths"
+    subject = _infer_subject_from_text(q.question, default_subject=subject_pref)
 
     try:
-        history = [{"role": m.role, "content": m.content} for m in q.history]
+        history_msgs = _APP_DB.list_chat_messages(student_id=student_id, limit=24)
+        history = [{"role": str(m.get("role")), "content": str(m.get("content"))} for m in history_msgs]
+
+        user_ts = int(time.time())
+        user_msg_id = _APP_DB.add_chat_message(
+            student_id=student_id,
+            role="user",
+            content=str(q.question or "").strip(),
+            subject=subject,
+            grade=grade,
+            quiz_required=False,
+            created_at=user_ts,
+        )
+        _append_daily_chat_log(
+            {
+                "id": user_msg_id,
+                "studentId": student_id,
+                "pseudonym": str(student.get("pseudonym") or ""),
+                "role": "user",
+                "content": str(q.question or "").strip(),
+                "subject": subject,
+                "grade": grade,
+                "conceptId": None,
+                "quizRequired": False,
+                "createdAt": user_ts,
+                "day": _day_str(user_ts),
+            }
+        )
+
         answer = mentor_response(q.question, history=history, subject=subject, grade=grade)
         quiz_required = bool(is_explain_request(q.question))
         concept_id: str | None = None
@@ -421,7 +676,35 @@ def ask(request: Request, q: Question):
                 grade=grade,
                 concept_text=str(q.question or "").strip(),
             )
-        suggested = suggest_topics(subject=subject, grade=grade, last_concept=str(q.question or ""), history=history)
+        asst_ts = int(time.time())
+        asst_msg_id = _APP_DB.add_chat_message(
+            student_id=student_id,
+            role="assistant",
+            content=str(answer or "").strip(),
+            subject=subject,
+            grade=grade,
+            concept_id=concept_id,
+            quiz_required=quiz_required,
+            created_at=asst_ts,
+        )
+        _append_daily_chat_log(
+            {
+                "id": asst_msg_id,
+                "studentId": student_id,
+                "pseudonym": str(student.get("pseudonym") or ""),
+                "role": "assistant",
+                "content": str(answer or "").strip(),
+                "subject": subject,
+                "grade": grade,
+                "conceptId": concept_id,
+                "quizRequired": quiz_required,
+                "createdAt": asst_ts,
+                "day": _day_str(asst_ts),
+            }
+        )
+        suggested = []
+        if _should_suggest_topics(str(q.question or "")):
+            suggested = suggest_topics(subject=subject, grade=grade, last_concept=str(q.question or ""), history=history)
         return {
             "answer": answer,
             "quizRequired": quiz_required,
@@ -435,6 +718,46 @@ def ask(request: Request, q: Question):
         raise HTTPException(status_code=503, detail=str(e))
 
 
+@app.get("/me/chatlogs")
+def me_chatlogs(request: Request, day: str | None = None, limit: int = 200):
+    student_id = _require_student(request)
+    d = (str(day or "").strip() or None) if day is not None else None
+    if not d:
+        d = _day_str(int(time.time()))
+    msgs = _APP_DB.list_chat_messages(student_id=student_id, day=d, limit=int(limit))
+    return {"day": d, "messages": msgs}
+
+
+@app.get("/me/chatlogs/days")
+def me_chatlog_days(request: Request, limit: int = 60):
+    student_id = _require_student(request)
+    days = _APP_DB.list_chat_days(student_id=student_id, limit=int(limit))
+    return {"days": days}
+
+
+@app.get("/parent/chatlogs")
+def parent_chatlogs(request: Request, studentId: str, day: str | None = None, limit: int = 200):
+    _ = _require_parent(request)
+    sid = str(studentId or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="studentId is required")
+    d = (str(day or "").strip() or None) if day is not None else None
+    if not d:
+        d = _day_str(int(time.time()))
+    msgs = _APP_DB.list_chat_messages(student_id=sid, day=d, limit=int(limit))
+    return {"studentId": sid, "day": d, "messages": msgs}
+
+
+@app.get("/parent/chatlogs/days")
+def parent_chatlog_days(request: Request, studentId: str, limit: int = 60):
+    _ = _require_parent(request)
+    sid = str(studentId or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="studentId is required")
+    days = _APP_DB.list_chat_days(student_id=sid, limit=int(limit))
+    return {"studentId": sid, "days": days}
+
+
 @app.post("/quiz/generate")
 def quiz_generate(request: Request, req: QuizGenerateRequest):
     student_id = _require_student(request)
@@ -442,11 +765,35 @@ def quiz_generate(request: Request, req: QuizGenerateRequest):
     if not student:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    concept_id = (req.conceptId or "").strip() or _APP_DB.get_latest_pending_concept_id(student_id)
+    concept_text = (req.concept or "").strip()
+    concept_id = (req.conceptId or "").strip()
+
     if not concept_id:
+        # If the client provided a concept text (manual quiz), generate a quiz for THAT concept.
+        # Do NOT silently attach to an older pending concept (which can be a different subject).
+        if concept_text:
+            subject = _infer_subject_from_text(concept_text, default_subject=str(student.get("subjectPref") or "maths"))
+            grade = int(req.grade or student.get("grade") or 1)
+            concept_id = _APP_DB.create_concept(
+                student_id=student_id,
+                subject=subject,
+                grade=grade,
+                concept_text=concept_text,
+            )
+        else:
+            concept_id = _APP_DB.get_latest_pending_concept_id(student_id) or ""
+
+    if concept_id:
+        meta = _APP_DB.get_concept_meta(student_id=student_id, concept_id=concept_id)
+        grade = int((meta or {}).get("grade") or req.grade or student.get("grade") or 1)
+        subject = str(
+            (meta or {}).get("subject")
+            or _infer_subject_from_text(req.concept or "", default_subject=str(student.get("subjectPref") or "maths"))
+        ).strip().lower() or "maths"
+    else:
         # Fallback: create a concept from the current context, so the quiz still has a progression anchor.
         concept_text = (req.concept or "the current concept from the conversation").strip()
-        subject = _infer_subject_from_text(concept_text)
+        subject = _infer_subject_from_text(concept_text, default_subject=str(student.get("subjectPref") or "maths"))
         grade = int(req.grade or student.get("grade") or 1)
         concept_id = _APP_DB.create_concept(
             student_id=student_id,
@@ -454,10 +801,6 @@ def quiz_generate(request: Request, req: QuizGenerateRequest):
             grade=grade,
             concept_text=concept_text,
         )
-    else:
-        meta = _APP_DB.get_concept_meta(student_id=student_id, concept_id=concept_id)
-        grade = int((meta or {}).get("grade") or req.grade or student.get("grade") or 1)
-        subject = str((meta or {}).get("subject") or _infer_subject_from_text(req.concept or "")).strip().lower() or "maths"
 
     history = [{"role": m.role, "content": m.content} for m in req.history]
     concept = (req.concept or "").strip()
@@ -567,6 +910,20 @@ def quiz_submit(request: Request, req: QuizSubmitRequest):
     except Exception:
         logger.exception("failed to persist attempt")
 
+    suggested = []
+    if understood:
+        try:
+            meta = _APP_DB.get_concept_meta(student_id=student_id, concept_id=str(record.get("conceptId")))
+            subj = str((meta or {}).get("subject") or "maths")
+            g = int((meta or {}).get("grade") or 1)
+            concept_text = str((meta or {}).get("conceptText") or "").strip()
+            history_msgs = _APP_DB.list_chat_messages(student_id=student_id, limit=24)
+            history = [{"role": str(m.get("role")), "content": str(m.get("content"))} for m in history_msgs]
+            if _should_suggest_topics(concept_text or ""):
+                suggested = suggest_topics(subject=subj, grade=g, last_concept=concept_text or "the concept from the quiz", history=history)
+        except Exception:
+            logger.exception("failed to generate suggested topics after quiz")
+
     return {
         "quizId": req.quizId,
         "conceptId": str(record.get("conceptId")),
@@ -577,6 +934,7 @@ def quiz_submit(request: Request, req: QuizSubmitRequest):
         "message": message,
         "review": review,
         "passPercent": pass_percent,
+        "suggestedTopics": suggested,
     }
 
 
@@ -673,6 +1031,31 @@ def groups_messages(request: Request, group_id: str, limit: int = 50):
     return {"messages": _APP_DB.list_group_messages(group_id=group_id, limit=int(limit))}
 
 
+def _format_group_study_fallback(*, options: dict, correct: str, results: dict) -> str:
+    dist = results.get("distribution") or {}
+    def _line(k: str) -> str:
+        d = dist.get(k) or {}
+        return f"{k}: {float(d.get('percent') or 0.0):g}% ({int(d.get('users') or 0)} users)"
+
+    correct_opt = str(correct or results.get("correct") or "").strip().upper()
+    correct_count = int(results.get("correctCount") or 0)
+    total = int(results.get("total") or 0)
+    opt_text = str((options or {}).get(correct_opt) or "").strip()
+
+    return (
+        "📊 Results:\n"
+        f"{_line('A')}\n"
+        f"{_line('B')}\n"
+        f"{_line('C')}\n"
+        f"{_line('D')}\n\n"
+        f"✅ Correct Answer: {correct_opt}\n\n"
+        "🎯 Performance:\n"
+        f"- {correct_count} out of {total} users answered correctly\n\n"
+        "🧠 Explanation:\n"
+        f"The correct answer is {correct_opt}. {('It matches: ' + opt_text) if opt_text else 'It best matches the concept tested.'}\n"
+    )
+
+
 @app.websocket("/ws/groups/{group_id}")
 async def ws_groups(group_id: str, ws: WebSocket):
     token = str(ws.query_params.get("token") or "").strip()
@@ -683,7 +1066,7 @@ async def ws_groups(group_id: str, ws: WebSocket):
         return
 
     try:
-        await _GROUP_HUB.join(group_id, ws)
+        await _GROUP_HUB.join(group_id, ws, student_id=student_id)
         # Send recent messages on join.
         try:
             msgs = _APP_DB.list_group_messages(group_id=group_id, limit=50)
@@ -691,19 +1074,306 @@ async def ws_groups(group_id: str, ws: WebSocket):
         except Exception:
             pass
 
+        # Send current group study state on join.
+        try:
+            queued = _APP_DB.count_group_study_queued(group_id)
+            open_quiz = _APP_DB.get_open_group_study_quiz(group_id)
+            await ws.send_json({"type": "study_queue", "queuedCount": int(queued)})
+            if open_quiz:
+                required = list(open_quiz.get("requiredParticipants") or [])
+                answers = _APP_DB.list_group_study_answers(open_quiz["id"])
+                required_set = set(str(x) for x in required if str(x).strip())
+                answered_set = {str(a.get("studentId")) for a in answers if str(a.get("studentId")) in required_set}
+                await ws.send_json(
+                    {
+                        "type": "study_open",
+                        "quizId": open_quiz["id"],
+                        "question": open_quiz.get("question"),
+                        "options": open_quiz.get("options") or {},
+                        "requiredParticipantCount": len(required_set),
+                    }
+                )
+                await ws.send_json(
+                    {
+                        "type": "study_progress",
+                        "quizId": open_quiz["id"],
+                        "answeredCount": len(answered_set),
+                        "requiredParticipantCount": len(required_set),
+                    }
+                )
+        except Exception:
+            pass
+
         while True:
             data = await ws.receive_json()
-            body = str((data or {}).get("body") or "").strip()
-            if not body:
+            typ = str((data or {}).get("type") or "").strip().lower()
+
+            # Backward-compat: plain chat payloads without type.
+            if not typ or typ == "message":
+                body = str((data or {}).get("body") or "").strip()
+                if not body:
+                    continue
+                msg = _APP_DB.add_group_message(group_id=group_id, student_id=student_id, body=body)
+                await _GROUP_HUB.broadcast(group_id, {"type": "message", "message": msg})
                 continue
-            msg = _APP_DB.add_group_message(group_id=group_id, student_id=student_id, body=body)
-            await _GROUP_HUB.broadcast(group_id, {"type": "message", "message": msg})
+
+            if typ == "study_start":
+                mode = str((data or {}).get("mode") or "").strip().lower()
+                if mode not in {"generate", "manual"}:
+                    await ws.send_json({"type": "study_error", "message": "mode must be generate|manual"})
+                    continue
+
+                # One open quiz at a time; others queue.
+                open_quiz = _APP_DB.get_open_group_study_quiz(group_id)
+                status = "queued" if open_quiz else "open"
+                required = sorted(_GROUP_HUB.participants(group_id)) if status == "open" else []
+
+                if mode == "manual":
+                    qtext = str((data or {}).get("question") or "").strip()
+                    options = (data or {}).get("options") or {}
+                    correct = str((data or {}).get("correct") or "").strip().upper()
+                    try:
+                        quiz_id = _APP_DB.create_group_study_quiz(
+                            group_id=group_id,
+                            created_by_student_id=student_id,
+                            status=status,
+                            source="manual",
+                            question=qtext,
+                            options={k: str(options.get(k) or "").strip() for k in ("A", "B", "C", "D")},
+                            correct=correct,
+                            required_participants=required,
+                        )
+                    except Exception as e:
+                        await ws.send_json({"type": "study_error", "message": str(e)})
+                        continue
+                else:
+                    # Generate from recent group chat + group meta (subject/grade).
+                    meta = _APP_DB.get_group_meta(group_id) or {}
+                    subject = str(meta.get("subject") or "maths")
+                    grade = int(meta.get("grade") or 1)
+                    msgs = _APP_DB.list_group_messages(group_id=group_id, limit=20)
+                    concept = "Group study topic"
+                    if msgs:
+                        concept = " ".join([str(m.get("body") or "") for m in msgs[-10:]]).strip() or concept
+                    try:
+                        quiz = generate_mcq_quiz(concept=concept, history=None, difficulty="medium", subject=subject, grade=grade)
+                        q0 = (quiz.get("questions") or [])[0] if isinstance(quiz.get("questions"), list) and quiz.get("questions") else None
+                        if not isinstance(q0, dict):
+                            raise ValueError("Generated quiz is invalid")
+                        quiz_id = _APP_DB.create_group_study_quiz(
+                            group_id=group_id,
+                            created_by_student_id=student_id,
+                            status=status,
+                            source="generated",
+                            question=str(q0.get("question") or "").strip(),
+                            options={k: str((q0.get("options") or {}).get(k) or "").strip() for k in ("A", "B", "C", "D")},
+                            correct=str(q0.get("correct") or "").strip().upper(),
+                            required_participants=required,
+                            llm_metadata={"subject": subject, "grade": grade},
+                        )
+                    except Exception as e:
+                        await ws.send_json({"type": "study_error", "message": str(e)})
+                        continue
+
+                queued = _APP_DB.count_group_study_queued(group_id)
+                await _GROUP_HUB.broadcast(group_id, {"type": "study_queue", "queuedCount": int(queued)})
+
+                # If we opened a quiz, broadcast it now.
+                if status == "open":
+                    oq = _APP_DB.get_open_group_study_quiz(group_id)
+                    if oq:
+                        required_set = set(str(x) for x in (oq.get("requiredParticipants") or []) if str(x).strip())
+                        await _GROUP_HUB.broadcast(
+                            group_id,
+                            {
+                                "type": "study_open",
+                                "quizId": oq["id"],
+                                "question": oq.get("question"),
+                                "options": oq.get("options") or {},
+                                "requiredParticipantCount": len(required_set),
+                            },
+                        )
+                        await _GROUP_HUB.broadcast(
+                            group_id,
+                            {
+                                "type": "study_progress",
+                                "quizId": oq["id"],
+                                "answeredCount": 0,
+                                "requiredParticipantCount": len(required_set),
+                            },
+                        )
+                continue
+
+            if typ == "study_answer":
+                quiz_id = str((data or {}).get("quizId") or "").strip()
+                choice = str((data or {}).get("choice") or "").strip().upper()
+                if not quiz_id:
+                    await ws.send_json({"type": "study_error", "message": "quizId is required"})
+                    continue
+                try:
+                    _APP_DB.record_group_study_answer(quiz_id=quiz_id, group_id=group_id, student_id=student_id, choice=choice)
+                except Exception as e:
+                    await ws.send_json({"type": "study_error", "message": str(e)})
+                    continue
+
+                open_quiz = _APP_DB.get_open_group_study_quiz(group_id)
+                if not open_quiz or str(open_quiz.get("id")) != quiz_id:
+                    continue
+
+                required_set = set(str(x) for x in (open_quiz.get("requiredParticipants") or []) if str(x).strip())
+                answers = _APP_DB.list_group_study_answers(quiz_id)
+                answered_set = {str(a.get("studentId")) for a in answers if str(a.get("studentId")) in required_set}
+                await _GROUP_HUB.broadcast(
+                    group_id,
+                    {
+                        "type": "study_progress",
+                        "quizId": quiz_id,
+                        "answeredCount": len(answered_set),
+                        "requiredParticipantCount": len(required_set),
+                    },
+                )
+
+                # Reveal when everyone required has answered (or no one is required anymore).
+                if (not required_set) or answered_set.issuperset(required_set):
+                    results = _APP_DB.compute_group_study_results(quiz_id)
+                    meta = _APP_DB.get_group_meta(group_id) or {}
+                    subject = str(meta.get("subject") or "maths")
+                    grade = int(meta.get("grade") or 1)
+                    # Map responses to pseudonyms for the LLM.
+                    ur = []
+                    for r in results.get("responses") or []:
+                        sid = str((r or {}).get("studentId") or "").strip()
+                        choice2 = str((r or {}).get("choice") or "").strip().upper()
+                        s = _APP_DB.get_student(sid) or {}
+                        ur.append({"user": str(s.get("pseudonym") or sid[:8] or "Student"), "answer": choice2})
+                    try:
+                        explanation_text = group_study_explanation(
+                            question=str(open_quiz.get("question") or ""),
+                            options=(open_quiz.get("options") or {}),
+                            correct=str(open_quiz.get("correct") or ""),
+                            user_responses=ur,
+                            subject=subject,
+                            grade=grade,
+                        )
+                    except Exception:
+                        explanation_text = _format_group_study_fallback(
+                            options=(open_quiz.get("options") or {}),
+                            correct=str(open_quiz.get("correct") or ""),
+                            results=results,
+                        )
+                    _APP_DB.finalize_group_study_reveal(quiz_id, results=results, explanation_text=explanation_text)
+                    await _GROUP_HUB.broadcast(
+                        group_id,
+                        {
+                            "type": "study_results",
+                            "quizId": quiz_id,
+                            "distribution": results.get("distribution") or {},
+                            "correct": results.get("correct") or "",
+                            "correctCount": results.get("correctCount") or 0,
+                            "total": results.get("total") or 0,
+                            "explanationText": explanation_text,
+                        },
+                    )
+
+                    # Open next queued quiz (if any) using current participants snapshot.
+                    next_required = sorted(_GROUP_HUB.participants(group_id))
+                    _ = _APP_DB.open_next_group_study_quiz_if_any(group_id, required_participants=next_required)
+                    queued = _APP_DB.count_group_study_queued(group_id)
+                    await _GROUP_HUB.broadcast(group_id, {"type": "study_queue", "queuedCount": int(queued)})
+                    oq = _APP_DB.get_open_group_study_quiz(group_id)
+                    if oq:
+                        req2 = set(str(x) for x in (oq.get("requiredParticipants") or []) if str(x).strip())
+                        await _GROUP_HUB.broadcast(
+                            group_id,
+                            {
+                                "type": "study_open",
+                                "quizId": oq["id"],
+                                "question": oq.get("question"),
+                                "options": oq.get("options") or {},
+                                "requiredParticipantCount": len(req2),
+                            },
+                        )
+                        await _GROUP_HUB.broadcast(
+                            group_id,
+                            {
+                                "type": "study_progress",
+                                "quizId": oq["id"],
+                                "answeredCount": 0,
+                                "requiredParticipantCount": len(req2),
+                            },
+                        )
+                continue
+
+            # Unknown type
+            await ws.send_json({"type": "study_error", "message": f"Unknown message type: {typ}"})
     except WebSocketDisconnect:
         pass
     except Exception:
         logger.exception("ws_groups failed")
     finally:
-        _GROUP_HUB.leave(group_id, ws)
+        left_sid = _GROUP_HUB.leave(group_id, ws)
+        # If someone leaves during an open study quiz, remove them from required participants and re-check reveal.
+        try:
+            if left_sid:
+                oq = _APP_DB.get_open_group_study_quiz(group_id)
+                if oq:
+                    required = [str(x) for x in (oq.get("requiredParticipants") or [])]
+                    if str(left_sid) in required:
+                        required2 = [x for x in required if x != str(left_sid)]
+                        _APP_DB.set_required_participants(oq["id"], student_ids=required2)
+                        required_set = set(required2)
+                        answers = _APP_DB.list_group_study_answers(oq["id"])
+                        answered_set = {str(a.get("studentId")) for a in answers if str(a.get("studentId")) in required_set}
+                        await _GROUP_HUB.broadcast(
+                            group_id,
+                            {
+                                "type": "study_progress",
+                                "quizId": oq["id"],
+                                "answeredCount": len(answered_set),
+                                "requiredParticipantCount": len(required_set),
+                            },
+                        )
+                        if (not required_set) or answered_set.issuperset(required_set):
+                            results = _APP_DB.compute_group_study_results(oq["id"])
+                            meta = _APP_DB.get_group_meta(group_id) or {}
+                            subject = str(meta.get("subject") or "maths")
+                            grade = int(meta.get("grade") or 1)
+                            ur = []
+                            for r in results.get("responses") or []:
+                                sid = str((r or {}).get("studentId") or "").strip()
+                                choice2 = str((r or {}).get("choice") or "").strip().upper()
+                                s = _APP_DB.get_student(sid) or {}
+                                ur.append({"user": str(s.get("pseudonym") or sid[:8] or "Student"), "answer": choice2})
+                            try:
+                                explanation_text = group_study_explanation(
+                                    question=str(oq.get("question") or ""),
+                                    options=(oq.get("options") or {}),
+                                    correct=str(oq.get("correct") or ""),
+                                    user_responses=ur,
+                                    subject=subject,
+                                    grade=grade,
+                                )
+                            except Exception:
+                                explanation_text = _format_group_study_fallback(
+                                    options=(oq.get("options") or {}),
+                                    correct=str(oq.get("correct") or ""),
+                                    results=results,
+                                )
+                            _APP_DB.finalize_group_study_reveal(oq["id"], results=results, explanation_text=explanation_text)
+                            await _GROUP_HUB.broadcast(
+                                group_id,
+                                {
+                                    "type": "study_results",
+                                    "quizId": oq["id"],
+                                    "distribution": results.get("distribution") or {},
+                                    "correct": results.get("correct") or "",
+                                    "correctCount": results.get("correctCount") or 0,
+                                    "total": results.get("total") or 0,
+                                    "explanationText": explanation_text,
+                                },
+                            )
+        except Exception:
+            pass
 
 
 @app.get("/profiles")

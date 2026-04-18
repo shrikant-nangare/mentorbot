@@ -87,6 +87,10 @@ CACHE_MAX_ENTRIES: int = _getenv_int("MENTORBOT_CACHE_MAX_ENTRIES", 5000)
 CACHE_PATH: str = _getenv_str("MENTORBOT_CACHE_PATH", f"{DB_DIR.rstrip('/')}/mentorbot-cache.sqlite3")
 CACHE_RETRIEVAL_ENABLED: bool = _getenv_bool("MENTORBOT_CACHE_RETRIEVAL_ENABLED", True)
 
+# Chat logs (daily JSONL logs on DB_DIR/PVC by default)
+CHAT_LOG_ENABLED: bool = _getenv_bool("MENTORBOT_CHAT_LOG_ENABLED", True)
+CHAT_LOG_DIR: str = _getenv_str("MENTORBOT_CHAT_LOG_DIR", f"{DB_DIR.rstrip('/')}/chat_logs")
+
 # Basic auth (HTTP Basic)
 BASIC_AUTH_ENABLED: bool = _getenv_bool("MENTORBOT_BASIC_AUTH_ENABLED", False)
 BASIC_AUTH_USERNAME: str = _getenv_str("MENTORBOT_BASIC_AUTH_USERNAME", "")

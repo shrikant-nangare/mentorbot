@@ -26,6 +26,7 @@
 
   const chat = document.getElementById('chat');
   const input = document.getElementById('input');
+  const dictateBtn = document.getElementById('dictateBtn');
   const sendBtn = document.getElementById('sendBtn');
   const statusEl = document.getElementById('status');
   const mathStatusEl = document.getElementById('mathStatus');
@@ -50,6 +51,7 @@
   const noteTitle = document.getElementById('noteTitle');
   const noteBody = document.getElementById('noteBody');
   const noteSaveBtn = document.getElementById('noteSaveBtn');
+  const noteDeleteBtn = document.getElementById('noteDeleteBtn');
   const noteRefreshBtn = document.getElementById('noteRefreshBtn');
   const notesStatus = document.getElementById('notesStatus');
   const notesList = document.getElementById('notesList');
@@ -66,6 +68,26 @@
   const groupChat = document.getElementById('groupChat');
   const groupChatInput = document.getElementById('groupChatInput');
   const groupSendBtn = document.getElementById('groupSendBtn');
+  const studyQueueEl = document.getElementById('studyQueue');
+  const studyStatusEl = document.getElementById('studyStatus');
+  const studyGenerateBtn = document.getElementById('studyGenerateBtn');
+  const studyManualToggleBtn = document.getElementById('studyManualToggleBtn');
+  const studyManualStartBtn = document.getElementById('studyManualStartBtn');
+  const studyManualForm = document.getElementById('studyManualForm');
+  const studyQuestion = document.getElementById('studyQuestion');
+  const studyOptA = document.getElementById('studyOptA');
+  const studyOptB = document.getElementById('studyOptB');
+  const studyOptC = document.getElementById('studyOptC');
+  const studyOptD = document.getElementById('studyOptD');
+  const studyCorrect = document.getElementById('studyCorrect');
+  const studyCurrent = document.getElementById('studyCurrent');
+  const studyCurrentQuestion = document.getElementById('studyCurrentQuestion');
+  const studyAnsA = document.getElementById('studyAnsA');
+  const studyAnsB = document.getElementById('studyAnsB');
+  const studyAnsC = document.getElementById('studyAnsC');
+  const studyAnsD = document.getElementById('studyAnsD');
+  const studyProgressEl = document.getElementById('studyProgress');
+  const studyResultsEl = document.getElementById('studyResults');
 
   let currentQuiz = null; // { quizId, title, questions: [{id, question, options}] }
   let sessionToken = localStorage.getItem('mb_session_token') || '';
@@ -75,6 +97,112 @@
   let gateConceptId = '';
   let gateSubject = 'maths';
   let gateGrade = 1;
+
+  let activeNoteId = '';
+
+  function setActiveNoteId(id) {
+    activeNoteId = String(id || '').trim();
+    if (noteDeleteBtn) noteDeleteBtn.disabled = !activeNoteId;
+  }
+
+  // Dictation (Speech-to-Text) via Web Speech API (browser-native)
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
+  let dictationOn = false;
+  let dictationBaseText = '';
+  let dictationFinalText = '';
+
+  function setDictationUi(on) {
+    dictationOn = !!on;
+    if (!dictateBtn) return;
+    dictateBtn.dataset.state = dictationOn ? 'on' : 'off';
+    dictateBtn.textContent = dictationOn ? 'Stop' : 'Mic';
+    dictateBtn.disabled = false;
+  }
+
+  function appendDictationText(text) {
+    const t = String(text || '');
+    if (!t) return;
+    if (!input) return;
+    const base = dictationBaseText || input.value || '';
+    const combined = `${base}${base && !base.endsWith(' ') ? ' ' : ''}${t}`.trimStart();
+    input.value = combined;
+  }
+
+  function stopDictation() {
+    try {
+      if (recognition) recognition.stop();
+    } catch (_) {}
+    setDictationUi(false);
+  }
+
+  function startDictation() {
+    if (!dictateBtn || !input) return;
+    if (!SpeechRecognition) {
+      addMessage('system', 'Dictation', 'This browser does not support speech-to-text. Try Chrome or Edge.');
+      return;
+    }
+    if (gateActive) {
+      addMessage('system', 'Dictation', 'Quiz required to continue (pass or skip).');
+      return;
+    }
+    if (dictationOn) {
+      stopDictation();
+      return;
+    }
+
+    dictationBaseText = String(input.value || '').trimEnd();
+    dictationFinalText = '';
+
+    recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+
+    recognition.onstart = () => {
+      setDictationUi(true);
+      statusEl.textContent = 'Listening…';
+      statusEl.className = '';
+      input.focus();
+    };
+
+    recognition.onresult = (event) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        const transcript = (res && res[0] && res[0].transcript) ? String(res[0].transcript) : '';
+        if (!transcript) continue;
+        if (res.isFinal) {
+          dictationFinalText += `${dictationFinalText ? ' ' : ''}${transcript.trim()}`;
+        } else {
+          interim += `${interim ? ' ' : ''}${transcript.trim()}`;
+        }
+      }
+      const full = [dictationFinalText, interim].filter(Boolean).join(' ').trim();
+      input.value = `${dictationBaseText}${dictationBaseText && full ? ' ' : ''}${full}`.trimStart();
+    };
+
+    recognition.onerror = (e) => {
+      const msg = e && e.error ? String(e.error) : 'unknown_error';
+      addMessage('system', 'Dictation error', msg);
+      if (statusEl.textContent === 'Listening…') statusEl.textContent = '';
+      setDictationUi(false);
+    };
+
+    recognition.onend = () => {
+      if (statusEl.textContent === 'Listening…') statusEl.textContent = '';
+      setDictationUi(false);
+    };
+
+    try {
+      dictateBtn.disabled = true;
+      recognition.start();
+    } catch (e) {
+      dictateBtn.disabled = false;
+      addMessage('system', 'Dictation', 'Could not start dictation. Check microphone permissions.');
+      setDictationUi(false);
+    }
+  }
 
   function applyTheme(mode) {
     const m = String(mode || 'auto').toLowerCase();
@@ -442,8 +570,21 @@
       b.style.height = '32px';
       b.style.minWidth = 'auto';
       b.addEventListener('click', () => {
+        if (gateActive) {
+          addMessage('system', 'Next up', 'Quiz required to continue (pass or skip).');
+          return;
+        }
+        if (chat.getAttribute('aria-busy') === 'true') return;
+        // Fill input (so user sees what was chosen), then send immediately.
         input.value = String(t);
         input.focus();
+        Promise.resolve(sendMessage(String(t))).catch(() => {});
+
+        // Remove the clicked chip, and remove the whole row if empty.
+        try {
+          b.remove();
+          if (!wrap.children || wrap.children.length === 0) row.remove();
+        } catch (_) {}
       });
       wrap.appendChild(b);
     });
@@ -464,6 +605,7 @@
   function setBusy(busy) {
     chat.setAttribute('aria-busy', busy ? 'true' : 'false');
     sendBtn.disabled = busy;
+    if (dictateBtn) dictateBtn.disabled = busy;
   }
 
   function setGate(active, info) {
@@ -476,6 +618,8 @@
     const disabled = gateActive;
     sendBtn.disabled = disabled;
     input.disabled = disabled;
+    if (disabled) stopDictation();
+    if (dictateBtn) dictateBtn.disabled = disabled;
     if (disabled) {
       statusEl.textContent = 'Quiz required to continue (pass or skip).';
       statusEl.className = '';
@@ -487,6 +631,15 @@
   function getLastAssistantMessage() {
     for (let i = history.length - 1; i >= 0; i--) {
       if (history[i].role === 'assistant' && history[i].content && history[i].content.trim()) {
+        return history[i].content.trim();
+      }
+    }
+    return '';
+  }
+
+  function getLastUserMessage() {
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === 'user' && history[i].content && history[i].content.trim()) {
         return history[i].content.trim();
       }
     }
@@ -536,7 +689,8 @@
     quizStatus.textContent = 'Generating…';
     quizStatus.className = '';
     try {
-      const concept = getLastAssistantMessage();
+      // Prefer the student's latest question for quiz topic.
+      const concept = getLastUserMessage() || getLastAssistantMessage();
       const resp = await fetch('/quiz/generate', {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -652,6 +806,10 @@
         setGate(true);
       }
 
+      if (result && Array.isArray(result.suggestedTopics) && result.suggestedTopics.length) {
+        addTopicChips(result.suggestedTopics);
+      }
+
       // Anonymous comparison stats (private, aggregate-only).
       try {
         const resp2 = await fetch(`/stats/compare?subject=${encodeURIComponent(gateSubject)}&grade=${encodeURIComponent(String(gateGrade))}`, {
@@ -677,8 +835,8 @@
     }
   }
 
-  async function sendMessage() {
-    const question = input.value.trim();
+  async function sendMessage(forcedText) {
+    const question = (forcedText != null ? String(forcedText) : String(input.value || '')).trim();
     if (!question) return;
 
     input.value = '';
@@ -726,7 +884,8 @@
     }
   }
 
-  sendBtn.addEventListener('click', sendMessage);
+  sendBtn.addEventListener('click', () => sendMessage());
+  if (dictateBtn) dictateBtn.addEventListener('click', startDictation);
   quizBtn.addEventListener('click', generateQuiz);
   quizSubmitBtn.addEventListener('click', submitQuiz);
   if (quizSkipBtn) quizSkipBtn.addEventListener('click', skipQuiz);
@@ -912,8 +1071,15 @@
     }
     const data = await resp.json();
     const notes = (data && data.notes) ? data.notes : [];
-    if (notesList) notesList.innerHTML = '';
-    notes.slice(0, 50).forEach((n) => {
+    setActiveNoteId('');
+    if (notesList) {
+      // Make scrolling robust even if CSS is cached/stale.
+      notesList.style.maxHeight = '45vh';
+      notesList.style.overflowY = 'auto';
+      notesList.style.paddingRight = '6px';
+      notesList.innerHTML = '';
+    }
+    notes.slice(0, 200).forEach((n) => {
       const card = document.createElement('div');
       card.className = 'panel';
       card.style.padding = '10px';
@@ -924,12 +1090,16 @@
       card.addEventListener('click', () => {
         if (noteTitle) noteTitle.value = String(n.title || '');
         if (noteBody) noteBody.value = String(n.body || '');
-        card.dataset.noteId = String(n.id || '');
+        setActiveNoteId(String(n.id || ''));
         if (notesStatus) notesStatus.textContent = `Loaded note ${String(n.id || '').slice(0, 8)}…`;
       });
       notesList.appendChild(card);
     });
-    if (notesStatus) notesStatus.textContent = notes.length ? '' : 'No notes yet.';
+    if (notesStatus) {
+      if (!notes.length) notesStatus.textContent = 'No notes yet.';
+      else if (notes.length > 200) notesStatus.textContent = `Showing 200 of ${notes.length} notes.`;
+      else notesStatus.textContent = '';
+    }
   }
 
   async function saveNote() {
@@ -955,16 +1125,81 @@
     await refreshNotes();
   }
 
+  async function deleteNote() {
+    if (!sessionToken) return;
+    const nid = String(activeNoteId || '').trim();
+    if (!nid) {
+      if (notesStatus) notesStatus.textContent = 'Select a note to delete.';
+      return;
+    }
+    if (!confirm('Delete this note? This cannot be undone.')) return;
+    if (notesStatus) notesStatus.textContent = 'Deleting…';
+    const resp = await fetch(`/notes/${encodeURIComponent(nid)}`, {
+      method: 'DELETE',
+      headers: authHeaders()
+    });
+    if (!resp.ok) {
+      if (notesStatus) notesStatus.textContent = await resp.text();
+      return;
+    }
+    setActiveNoteId('');
+    if (noteTitle) noteTitle.value = '';
+    if (noteBody) noteBody.value = '';
+    if (notesStatus) notesStatus.textContent = 'Deleted.';
+    await refreshNotes();
+  }
+
   if (notesBtn) notesBtn.addEventListener('click', async () => {
     showNotesModal(true);
     await refreshNotes();
   });
   if (notesCloseBtn) notesCloseBtn.addEventListener('click', () => showNotesModal(false));
   if (noteSaveBtn) noteSaveBtn.addEventListener('click', saveNote);
+  if (noteDeleteBtn) noteDeleteBtn.addEventListener('click', deleteNote);
   if (noteRefreshBtn) noteRefreshBtn.addEventListener('click', refreshNotes);
 
   let activeGroup = null; // {id, inviteCode, name}
   let groupWs = null;
+  let activeStudyQuizId = '';
+  let answeredStudyQuizId = '';
+
+  function setStudyQueue(n) {
+    const c = Number(n || 0);
+    if (studyQueueEl) studyQueueEl.textContent = c > 0 ? `Queued questions: ${c}` : '';
+  }
+
+  function setStudyStatus(txt) {
+    if (studyStatusEl) studyStatusEl.textContent = String(txt || '');
+  }
+
+  function showManualForm(show) {
+    const on = !!show;
+    if (studyManualForm) studyManualForm.style.display = on ? 'block' : 'none';
+    if (studyManualStartBtn) studyManualStartBtn.style.display = on ? 'inline-block' : 'none';
+  }
+
+  function setStudyCurrent(open) {
+    if (studyCurrent) studyCurrent.style.display = open ? 'block' : 'none';
+    if (!open) {
+      activeStudyQuizId = '';
+      answeredStudyQuizId = '';
+      if (studyResultsEl) studyResultsEl.style.display = 'none';
+      if (studyResultsEl) studyResultsEl.textContent = '';
+      if (studyProgressEl) studyProgressEl.textContent = '';
+    }
+  }
+
+  function setStudyAnswerButtonsDisabled(disabled) {
+    [studyAnsA, studyAnsB, studyAnsC, studyAnsD].forEach((b) => {
+      if (b) b.disabled = !!disabled;
+    });
+  }
+
+  function sendStudy(payload) {
+    if (!groupWs || groupWs.readyState !== 1) return false;
+    groupWs.send(JSON.stringify(payload));
+    return true;
+  }
 
   function appendGroupChatLine(who, text) {
     if (!groupChat) return;
@@ -1010,6 +1245,10 @@
   function openGroup(g) {
     activeGroup = g;
     if (groupChat) groupChat.innerHTML = '';
+    setStudyQueue(0);
+    setStudyStatus('');
+    showManualForm(false);
+    setStudyCurrent(false);
     closeGroupWs();
     appendGroupChatLine('System', `Joined "${g.name}"`);
     const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/groups/${encodeURIComponent(g.id)}?token=${encodeURIComponent(sessionToken)}`;
@@ -1022,11 +1261,79 @@
         } else if (msg.type === 'message' && msg.message) {
           const m = msg.message;
           appendGroupChatLine(String(m.studentId || '').slice(0, 8), m.body);
+        } else if (msg.type === 'study_queue') {
+          setStudyQueue(msg.queuedCount || 0);
+        } else if (msg.type === 'study_open') {
+          activeStudyQuizId = String(msg.quizId || '');
+          answeredStudyQuizId = '';
+          setStudyCurrent(true);
+          if (studyCurrentQuestion) studyCurrentQuestion.textContent = String(msg.question || 'Group question');
+          if (studyResultsEl) { studyResultsEl.style.display = 'none'; studyResultsEl.textContent = ''; }
+          if (studyProgressEl) studyProgressEl.textContent = `Answers: 0/${Number(msg.requiredParticipantCount || 0)}`;
+          setStudyAnswerButtonsDisabled(false);
+        } else if (msg.type === 'study_progress') {
+          const qid = String(msg.quizId || '');
+          if (!activeStudyQuizId || qid !== activeStudyQuizId) return;
+          const a = Number(msg.answeredCount || 0);
+          const t = Number(msg.requiredParticipantCount || 0);
+          if (studyProgressEl) studyProgressEl.textContent = `Answers: ${a}/${t}`;
+        } else if (msg.type === 'study_results') {
+          const qid = String(msg.quizId || '');
+          if (!activeStudyQuizId || qid !== activeStudyQuizId) {
+            // Still show results if we joined late and got a results push.
+            activeStudyQuizId = qid;
+          }
+          setStudyAnswerButtonsDisabled(true);
+          if (studyResultsEl) {
+            studyResultsEl.style.display = 'block';
+            studyResultsEl.textContent = String(msg.explanationText || '').trim() || 'Results ready.';
+          }
+        } else if (msg.type === 'study_error') {
+          setStudyStatus(String(msg.message || 'Study error'));
         }
       } catch (_) {}
     };
     groupWs.onerror = () => appendGroupChatLine('System', 'WebSocket error');
     groupWs.onclose = () => appendGroupChatLine('System', 'Disconnected');
+  }
+
+  function startStudyGenerate() {
+    if (!activeGroup) return;
+    setStudyStatus('Generating…');
+    if (!sendStudy({ type: 'study_start', mode: 'generate' })) setStudyStatus('Not connected.');
+  }
+
+  function toggleStudyManual() {
+    const show = !(studyManualForm && studyManualForm.style.display === 'block');
+    showManualForm(show);
+    setStudyStatus('');
+  }
+
+  function startStudyManual() {
+    if (!activeGroup) return;
+    const q = (studyQuestion && studyQuestion.value) ? studyQuestion.value.trim() : '';
+    const a = (studyOptA && studyOptA.value) ? studyOptA.value.trim() : '';
+    const b = (studyOptB && studyOptB.value) ? studyOptB.value.trim() : '';
+    const c = (studyOptC && studyOptC.value) ? studyOptC.value.trim() : '';
+    const d = (studyOptD && studyOptD.value) ? studyOptD.value.trim() : '';
+    const correct = (studyCorrect && studyCorrect.value) ? String(studyCorrect.value) : 'A';
+    if (!q || !a || !b || !c || !d) {
+      setStudyStatus('Fill question and all options.');
+      return;
+    }
+    setStudyStatus('Starting…');
+    const ok = sendStudy({ type: 'study_start', mode: 'manual', question: q, options: { A: a, B: b, C: c, D: d }, correct });
+    if (!ok) setStudyStatus('Not connected.');
+  }
+
+  function answerStudy(choice) {
+    if (!activeStudyQuizId) return;
+    if (answeredStudyQuizId === activeStudyQuizId) return;
+    const ok = sendStudy({ type: 'study_answer', quizId: activeStudyQuizId, choice });
+    if (!ok) return;
+    answeredStudyQuizId = activeStudyQuizId;
+    setStudyAnswerButtonsDisabled(true);
+    setStudyStatus('Answer submitted.');
   }
 
   async function createGroup() {
@@ -1087,6 +1394,13 @@
   if (groupCreateBtn) groupCreateBtn.addEventListener('click', createGroup);
   if (groupJoinBtn) groupJoinBtn.addEventListener('click', joinGroup);
   if (groupSendBtn) groupSendBtn.addEventListener('click', sendGroupMessage);
+  if (studyGenerateBtn) studyGenerateBtn.addEventListener('click', startStudyGenerate);
+  if (studyManualToggleBtn) studyManualToggleBtn.addEventListener('click', toggleStudyManual);
+  if (studyManualStartBtn) studyManualStartBtn.addEventListener('click', startStudyManual);
+  if (studyAnsA) studyAnsA.addEventListener('click', () => answerStudy('A'));
+  if (studyAnsB) studyAnsB.addEventListener('click', () => answerStudy('B'));
+  if (studyAnsC) studyAnsC.addEventListener('click', () => answerStudy('C'));
+  if (studyAnsD) studyAnsD.addEventListener('click', () => answerStudy('D'));
   if (groupChatInput) groupChatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();

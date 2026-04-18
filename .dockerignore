@@ -16,3 +16,6 @@ venv/
 db/
 data/
 
+# Local GitOps repo clone (not needed for image)
+argocd/argocd-config/
+

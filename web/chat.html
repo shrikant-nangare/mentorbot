@@ -7,7 +7,7 @@
 
     <link rel="icon" href="/static/logo.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/katex/katex.min.css" />
-    <link rel="stylesheet" href="/static/app.css" />
+    <link rel="stylesheet" href="/static/app.css?v=2026-04-03" />
   </head>
   <body>
     <div id="authScreen" class="authScreen" style="display:none;" aria-live="polite">
@@ -100,15 +100,16 @@
             <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
               <input id="noteTitle" class="textInput" type="text" placeholder="Title" />
               <button id="noteSaveBtn" class="btnSmall" type="button">Save note</button>
+              <button id="noteDeleteBtn" class="btnSmall" type="button" disabled>Delete</button>
               <button id="noteRefreshBtn" class="btnSmall" type="button">Refresh</button>
             </div>
             <textarea id="noteBody" style="margin-top:10px; width:100%; min-height: 120px;" placeholder="Write your notes…"></textarea>
             <div id="notesStatus" class="hint" style="margin-top: 8px;"></div>
           </div>
 
-          <div class="panel" style="margin-top: 12px;">
+          <div id="notesListPanel" class="panel" style="margin-top: 12px;">
             <div class="hint" style="margin-bottom: 6px;">Recent notes</div>
-            <div id="notesList" style="display:grid; gap:8px;"></div>
+            <div id="notesList" style="display:grid; gap:8px; max-height: 45vh; overflow:auto; padding-right: 6px;"></div>
           </div>
         </div>
       </div>
@@ -139,6 +140,49 @@
           <div class="panel" style="margin-top: 12px;">
             <div class="hint" style="margin-bottom: 6px;">My groups</div>
             <div id="groupsList" style="display:grid; gap:8px;"></div>
+          </div>
+
+          <div class="panel" style="margin-top: 12px;">
+            <div class="hint" style="margin-bottom: 6px;">Group study (live quiz)</div>
+            <div id="studyQueue" class="hint" style="margin-bottom: 8px;"></div>
+
+            <div style="display:flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+              <button id="studyGenerateBtn" class="btnSmall" type="button">Generate</button>
+              <button id="studyManualToggleBtn" class="btnSmall" type="button">Manual</button>
+              <button id="studyManualStartBtn" class="btnSmall" type="button" style="display:none;">Start manual</button>
+              <span id="studyStatus" class="hint"></span>
+            </div>
+
+            <div id="studyManualForm" style="display:none; margin-top: 10px;">
+              <input id="studyQuestion" class="textInput" type="text" placeholder="Question" style="width:100%; margin-bottom: 8px;" />
+              <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <input id="studyOptA" class="textInput" type="text" placeholder="A option" />
+                <input id="studyOptB" class="textInput" type="text" placeholder="B option" />
+                <input id="studyOptC" class="textInput" type="text" placeholder="C option" />
+                <input id="studyOptD" class="textInput" type="text" placeholder="D option" />
+              </div>
+              <div style="display:flex; gap: 10px; align-items: center; margin-top: 8px;">
+                <span class="hint">Correct</span>
+                <select id="studyCorrect" class="selectInput" aria-label="Correct option">
+                  <option value="A">A</option>
+                  <option value="B">B</option>
+                  <option value="C">C</option>
+                  <option value="D">D</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="studyCurrent" style="display:none; margin-top: 12px;">
+              <div id="studyCurrentQuestion" style="font-weight:800; margin-bottom: 8px;"></div>
+              <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <button id="studyAnsA" class="btnSmall" type="button">A</button>
+                <button id="studyAnsB" class="btnSmall" type="button">B</button>
+                <button id="studyAnsC" class="btnSmall" type="button">C</button>
+                <button id="studyAnsD" class="btnSmall" type="button">D</button>
+              </div>
+              <div id="studyProgress" class="hint" style="margin-top: 8px;"></div>
+              <pre id="studyResults" class="studyResults" style="display:none; margin-top: 10px;"></pre>
+            </div>
           </div>
 
           <div class="panel" style="margin-top: 12px;">
@@ -198,7 +242,12 @@
 
       <div class="composer">
         <textarea id="input" placeholder="Ask a question…"></textarea>
-        <button id="sendBtn" type="button">Send</button>
+        <div class="composerActions">
+          <button id="dictateBtn" class="btnSmall" type="button" title="Dictation (speech to text)" aria-label="Dictation">
+            Mic
+          </button>
+          <button id="sendBtn" type="button">Send</button>
+        </div>
       </div>
 
       <div class="footer">
@@ -217,7 +266,7 @@
     <script src="/static/katex/katex.min.js"></script>
     <script src="/static/vendor/marked.min.js"></script>
     <script src="/static/vendor/purify.min.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=2026-04-03"></script>
   </body>
 </html>
 

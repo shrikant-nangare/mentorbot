@@ -57,3 +57,6 @@ pnpm-debug.log*
 out/
 coverage/
 
+# Local GitOps repo clone (keep in separate repo)
+argocd/argocd-config/
+

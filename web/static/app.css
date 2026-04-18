@@ -169,10 +169,18 @@ html[data-theme="dark"] body {
   border-radius: 18px;
   box-shadow: 0 30px 90px rgba(15, 23, 42, 0.22);
   padding: 18px;
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .modalBody {
   margin-top: 12px;
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
 }
 
 .panel {
@@ -180,6 +188,64 @@ html[data-theme="dark"] body {
   border-radius: 14px;
   padding: 12px;
   background: rgba(255,255,255,0.62);
+}
+
+#notesModal #notesList {
+  height: clamp(220px, 45vh, 520px);
+  overflow-y: scroll;
+  overscroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 6px; /* keep content off scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 23, 42, 0.25) transparent;
+}
+
+/* Notes modal: keep editor visible, scroll saved notes list */
+#notesModal .modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#notesListPanel {
+  flex: 1 1 auto;
+  min-height: 0; /* allow inner scroll */
+  display: flex;
+  flex-direction: column;
+}
+
+#notesListPanel > .hint {
+  flex: 0 0 auto;
+}
+
+#notesList {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Ensure list panel can shrink inside the modal */
+#notesModal #notesListPanel {
+  min-height: 0;
+}
+
+html[data-theme="dark"] #notesModal #notesList {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+#notesModal #notesList::-webkit-scrollbar {
+  width: 10px;
+}
+
+#notesModal #notesList::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+html[data-theme="dark"] #notesModal #notesList::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: padding-box;
 }
 
 .textInput {
@@ -446,6 +512,21 @@ header .hint {
   align-items: end;
 }
 
+.composerActions {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+}
+
+#dictateBtn {
+  min-width: 56px;
+}
+
+#dictateBtn[data-state="on"] {
+  border-color: rgba(225, 29, 72, 0.40);
+  box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.14);
+}
+
 .quizPanel {
   border-radius: 14px;
   border: 1px solid var(--border);
@@ -520,6 +601,16 @@ legend {
   background: rgba(255,255,255,0.04);
   font-size: 13px;
   color: rgba(255,255,255,0.88);
+}
+
+.studyResults {
+  white-space: pre-wrap;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.10);
+  color: var(--text);
+  margin: 0;
 }
 
 textarea {

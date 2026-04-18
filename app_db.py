@@ -23,6 +23,11 @@ def _now() -> int:
     return int(time.time())
 
 
+def _day_str(ts: int) -> str:
+    # Local time is more intuitive for "daily" logs.
+    return time.strftime("%Y-%m-%d", time.localtime(int(ts)))
+
+
 def _sha256_bytes(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
 
@@ -171,6 +176,59 @@ class AppDb:
                       FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
                     );
                     CREATE INDEX IF NOT EXISTS idx_group_messages_group_created_at ON group_messages(group_id, created_at);
+
+                    CREATE TABLE IF NOT EXISTS chat_messages (
+                      id TEXT PRIMARY KEY,
+                      student_id TEXT NOT NULL,
+                      role TEXT NOT NULL,
+                      content TEXT NOT NULL,
+                      subject TEXT NOT NULL,
+                      grade INTEGER NOT NULL,
+                      concept_id TEXT,
+                      quiz_required INTEGER NOT NULL,
+                      created_at INTEGER NOT NULL,
+                      day TEXT NOT NULL,
+                      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_chat_messages_student_created_at ON chat_messages(student_id, created_at);
+                    CREATE INDEX IF NOT EXISTS idx_chat_messages_student_day_created_at ON chat_messages(student_id, day, created_at);
+
+                    CREATE TABLE IF NOT EXISTS group_study_quizzes (
+                      id TEXT PRIMARY KEY,
+                      group_id TEXT NOT NULL,
+                      status TEXT NOT NULL,
+                      source TEXT NOT NULL,
+                      created_by_student_id TEXT NOT NULL,
+                      created_at INTEGER NOT NULL,
+                      opened_at INTEGER,
+                      revealed_at INTEGER,
+                      question_text TEXT NOT NULL,
+                      options_json TEXT NOT NULL,
+                      correct_option TEXT NOT NULL,
+                      required_participants_json TEXT NOT NULL,
+                      results_json TEXT,
+                      explanation_text TEXT,
+                      llm_metadata_json TEXT,
+                      FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                      FOREIGN KEY(created_by_student_id) REFERENCES students(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_group_study_quizzes_group_status_created_at
+                      ON group_study_quizzes(group_id, status, created_at);
+
+                    CREATE TABLE IF NOT EXISTS group_study_answers (
+                      id TEXT PRIMARY KEY,
+                      quiz_id TEXT NOT NULL,
+                      group_id TEXT NOT NULL,
+                      student_id TEXT NOT NULL,
+                      choice TEXT NOT NULL,
+                      created_at INTEGER NOT NULL,
+                      UNIQUE(quiz_id, student_id),
+                      FOREIGN KEY(quiz_id) REFERENCES group_study_quizzes(id) ON DELETE CASCADE,
+                      FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                      FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_group_study_answers_quiz_created_at
+                      ON group_study_answers(quiz_id, created_at);
                     """.strip()
                 )
                 conn.execute("INSERT OR IGNORE INTO parent_settings(id) VALUES (1)")
@@ -1217,6 +1275,483 @@ class AppDb:
                     for r in rows
                 ]
                 return list(reversed(msgs))
+            finally:
+                conn.close()
+
+    # ---------- Group study (live MCQ) ----------
+    def get_group_meta(self, group_id: str) -> dict[str, Any] | None:
+        gid = str(group_id or "").strip()
+        if not gid:
+            return None
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                r = conn.execute(
+                    "SELECT id, name, subject, grade FROM groups WHERE id = ?",
+                    (gid,),
+                ).fetchone()
+                if not r:
+                    return None
+                return {
+                    "id": str(r["id"]),
+                    "name": str(r["name"]),
+                    "subject": str(r["subject"]),
+                    "grade": int(r["grade"]),
+                }
+            finally:
+                conn.close()
+
+    def get_open_group_study_quiz(self, group_id: str) -> dict[str, Any] | None:
+        gid = str(group_id or "").strip()
+        if not gid:
+            return None
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                r = conn.execute(
+                    """
+                    SELECT id, group_id, status, source, created_by_student_id, created_at, opened_at,
+                           question_text, options_json, correct_option, required_participants_json,
+                           results_json, explanation_text
+                    FROM group_study_quizzes
+                    WHERE group_id = ? AND status = 'open'
+                    ORDER BY opened_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (gid,),
+                ).fetchone()
+                if not r:
+                    return None
+                return self._row_to_group_study_quiz(dict(r))
+            finally:
+                conn.close()
+
+    def count_group_study_queued(self, group_id: str) -> int:
+        gid = str(group_id or "").strip()
+        if not gid:
+            return 0
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                r = conn.execute(
+                    "SELECT COUNT(1) AS c FROM group_study_quizzes WHERE group_id = ? AND status = 'queued'",
+                    (gid,),
+                ).fetchone()
+                return int(r["c"] or 0) if r else 0
+            finally:
+                conn.close()
+
+    def _row_to_group_study_quiz(self, row: dict[str, Any]) -> dict[str, Any]:
+        try:
+            options = json.loads(str(row.get("options_json") or "{}"))
+        except Exception:
+            options = {}
+        try:
+            required = json.loads(str(row.get("required_participants_json") or "[]"))
+        except Exception:
+            required = []
+        try:
+            results = json.loads(str(row.get("results_json") or "null")) if row.get("results_json") is not None else None
+        except Exception:
+            results = None
+        return {
+            "id": str(row.get("id")),
+            "groupId": str(row.get("group_id")),
+            "status": str(row.get("status")),
+            "source": str(row.get("source")),
+            "createdByStudentId": str(row.get("created_by_student_id")),
+            "createdAt": int(row.get("created_at") or 0),
+            "openedAt": (int(row.get("opened_at")) if row.get("opened_at") is not None else None),
+            "question": str(row.get("question_text") or ""),
+            "options": options,
+            "correct": str(row.get("correct_option") or ""),
+            "requiredParticipants": [str(x) for x in (required or [])],
+            "results": results,
+            "explanationText": (str(row.get("explanation_text")) if row.get("explanation_text") is not None else None),
+        }
+
+    def create_group_study_quiz(
+        self,
+        *,
+        group_id: str,
+        created_by_student_id: str,
+        status: str,
+        source: str,
+        question: str,
+        options: dict[str, str],
+        correct: str,
+        required_participants: list[str],
+        llm_metadata: dict[str, Any] | None = None,
+    ) -> str:
+        gid = str(group_id or "").strip()
+        sid = str(created_by_student_id or "").strip()
+        st = str(status or "").strip().lower()
+        src = str(source or "").strip().lower()
+        q = str(question or "").strip()
+        c = str(correct or "").strip().upper()
+        if not gid or not sid:
+            raise ValueError("group_id/created_by_student_id is empty")
+        if st not in {"queued", "open", "revealed"}:
+            raise ValueError("status must be queued|open|revealed")
+        if src not in {"manual", "generated"}:
+            raise ValueError("source must be manual|generated")
+        if not q:
+            raise ValueError("question is empty")
+        if c not in {"A", "B", "C", "D"}:
+            raise ValueError("correct must be A/B/C/D")
+        for k in ("A", "B", "C", "D"):
+            if k not in options or not str(options.get(k) or "").strip():
+                raise ValueError("options must include non-empty A/B/C/D")
+
+        now = _now()
+        qid = str(uuid4())
+        opened_at = int(now) if st == "open" else None
+        required = [str(x).strip() for x in (required_participants or []) if str(x).strip()]
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO group_study_quizzes(
+                      id, group_id, status, source, created_by_student_id, created_at, opened_at,
+                      question_text, options_json, correct_option, required_participants_json, llm_metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        qid,
+                        gid,
+                        st,
+                        src,
+                        sid,
+                        int(now),
+                        opened_at,
+                        q,
+                        json.dumps(options, ensure_ascii=False),
+                        c,
+                        json.dumps(required, ensure_ascii=False),
+                        (json.dumps(llm_metadata or {}, ensure_ascii=False) if llm_metadata is not None else None),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return qid
+
+    def open_next_group_study_quiz_if_any(self, group_id: str, *, required_participants: list[str]) -> dict[str, Any] | None:
+        gid = str(group_id or "").strip()
+        if not gid:
+            return None
+        now = _now()
+        required = [str(x).strip() for x in (required_participants or []) if str(x).strip()]
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                r = conn.execute(
+                    """
+                    SELECT id
+                    FROM group_study_quizzes
+                    WHERE group_id = ? AND status = 'queued'
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """,
+                    (gid,),
+                ).fetchone()
+                if not r:
+                    return None
+                qid = str(r["id"])
+                conn.execute(
+                    """
+                    UPDATE group_study_quizzes
+                    SET status = 'open', opened_at = ?, required_participants_json = ?
+                    WHERE id = ?
+                    """,
+                    (int(now), json.dumps(required, ensure_ascii=False), qid),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return self.get_open_group_study_quiz(gid)
+
+    def set_required_participants(self, quiz_id: str, *, student_ids: list[str]) -> None:
+        qid = str(quiz_id or "").strip()
+        if not qid:
+            return
+        ids = [str(x).strip() for x in (student_ids or []) if str(x).strip()]
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                conn.execute(
+                    "UPDATE group_study_quizzes SET required_participants_json = ? WHERE id = ?",
+                    (json.dumps(ids, ensure_ascii=False), qid),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def record_group_study_answer(self, *, quiz_id: str, group_id: str, student_id: str, choice: str) -> bool:
+        qid = str(quiz_id or "").strip()
+        gid = str(group_id or "").strip()
+        sid = str(student_id or "").strip()
+        ch = str(choice or "").strip().upper()
+        if not qid or not gid or not sid:
+            raise ValueError("quiz_id/group_id/student_id is empty")
+        if ch not in {"A", "B", "C", "D"}:
+            raise ValueError("choice must be A/B/C/D")
+        now = _now()
+        aid = str(uuid4())
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                cur = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO group_study_answers(id, quiz_id, group_id, student_id, choice, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (aid, qid, gid, sid, ch, int(now)),
+                )
+                conn.commit()
+                return int(getattr(cur, "rowcount", 0) or 0) > 0
+            finally:
+                conn.close()
+
+    def list_group_study_answers(self, quiz_id: str) -> list[dict[str, Any]]:
+        qid = str(quiz_id or "").strip()
+        if not qid:
+            return []
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT student_id, choice, created_at
+                    FROM group_study_answers
+                    WHERE quiz_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (qid,),
+                ).fetchall()
+                return [{"studentId": str(r["student_id"]), "choice": str(r["choice"]), "createdAt": int(r["created_at"])} for r in rows]
+            finally:
+                conn.close()
+
+    def compute_group_study_results(self, quiz_id: str) -> dict[str, Any]:
+        qid = str(quiz_id or "").strip()
+        if not qid:
+            raise ValueError("quiz_id is empty")
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                q = conn.execute(
+                    """
+                    SELECT id, group_id, question_text, options_json, correct_option, required_participants_json
+                    FROM group_study_quizzes
+                    WHERE id = ?
+                    """,
+                    (qid,),
+                ).fetchone()
+                if not q:
+                    raise ValueError("quiz not found")
+                try:
+                    required = json.loads(str(q["required_participants_json"] or "[]"))
+                except Exception:
+                    required = []
+                required_set = {str(x) for x in (required or []) if str(x).strip()}
+                rows = conn.execute(
+                    """
+                    SELECT student_id, choice
+                    FROM group_study_answers
+                    WHERE quiz_id = ?
+                    """,
+                    (qid,),
+                ).fetchall()
+                answers = [{"studentId": str(r["student_id"]), "choice": str(r["choice"])} for r in rows]
+            finally:
+                conn.close()
+
+        counts = {k: 0 for k in ("A", "B", "C", "D")}
+        filtered = []
+        for a in answers:
+            sid = str(a.get("studentId") or "")
+            ch = str(a.get("choice") or "").upper()
+            if required_set and sid not in required_set:
+                continue
+            if ch in counts:
+                counts[ch] += 1
+                filtered.append({"studentId": sid, "choice": ch})
+
+        total = len(required_set) if required_set else len(filtered)
+        total = max(0, int(total))
+        correct = str(q["correct_option"]).strip().upper()
+        correct_count = counts.get(correct, 0)
+        dist = {}
+        for k in ("A", "B", "C", "D"):
+            pct = (counts[k] / total * 100.0) if total > 0 else 0.0
+            dist[k] = {"percent": round(pct, 1), "users": int(counts[k])}
+
+        return {
+            "quizId": qid,
+            "groupId": str(q["group_id"]),
+            "distribution": dist,
+            "correct": correct,
+            "correctCount": int(correct_count),
+            "total": int(total),
+            "responses": filtered,
+        }
+
+    def finalize_group_study_reveal(self, quiz_id: str, *, results: dict[str, Any], explanation_text: str) -> None:
+        qid = str(quiz_id or "").strip()
+        if not qid:
+            return
+        now = _now()
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                conn.execute(
+                    """
+                    UPDATE group_study_quizzes
+                    SET status = 'revealed', revealed_at = ?, results_json = ?, explanation_text = ?
+                    WHERE id = ?
+                    """,
+                    (int(now), json.dumps(results, ensure_ascii=False), str(explanation_text or "").strip(), qid),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    # ---------- Chat logs ----------
+    def add_chat_message(
+        self,
+        *,
+        student_id: str,
+        role: str,
+        content: str,
+        subject: str,
+        grade: int,
+        concept_id: str | None = None,
+        quiz_required: bool = False,
+        created_at: int | None = None,
+    ) -> str:
+        sid = str(student_id or "").strip()
+        r = str(role or "").strip().lower()
+        c = str(content or "").strip()
+        subj = str(subject or "").strip().lower() or "maths"
+        g = int(grade)
+        cid = (str(concept_id or "").strip() or None) if concept_id is not None else None
+        if not sid or not r or not c:
+            raise ValueError("student_id/role/content is empty")
+        if r not in {"user", "assistant"}:
+            raise ValueError("role must be user|assistant")
+        if g < 1 or g > 12:
+            raise ValueError("grade must be 1..12")
+
+        mid = str(uuid4())
+        ts = int(created_at) if created_at is not None else _now()
+        day = _day_str(ts)
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO chat_messages(
+                      id, student_id, role, content, subject, grade, concept_id, quiz_required, created_at, day
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        mid,
+                        sid,
+                        r,
+                        c,
+                        subj,
+                        int(g),
+                        cid,
+                        1 if bool(quiz_required) else 0,
+                        int(ts),
+                        str(day),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return mid
+
+    def list_chat_messages(
+        self,
+        *,
+        student_id: str,
+        day: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        sid = str(student_id or "").strip()
+        if not sid:
+            raise ValueError("student_id is empty")
+        d = (str(day or "").strip() or None) if day is not None else None
+        limit = max(1, min(int(limit), 5000))
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                if d:
+                    rows = conn.execute(
+                        """
+                        SELECT id, student_id, role, content, subject, grade, concept_id, quiz_required, created_at, day
+                        FROM chat_messages
+                        WHERE student_id = ? AND day = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT ?
+                        """,
+                        (sid, d, int(limit)),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT id, student_id, role, content, subject, grade, concept_id, quiz_required, created_at, day
+                        FROM chat_messages
+                        WHERE student_id = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT ?
+                        """,
+                        (sid, int(limit)),
+                    ).fetchall()
+                msgs = [
+                    {
+                        "id": str(r["id"]),
+                        "studentId": str(r["student_id"]),
+                        "role": str(r["role"]),
+                        "content": str(r["content"]),
+                        "subject": str(r["subject"]),
+                        "grade": int(r["grade"]),
+                        "conceptId": (str(r["concept_id"]) if r["concept_id"] is not None else None),
+                        "quizRequired": bool(int(r["quiz_required"])),
+                        "createdAt": int(r["created_at"]),
+                        "day": str(r["day"]),
+                    }
+                    for r in rows
+                ]
+                return list(reversed(msgs))
+            finally:
+                conn.close()
+
+    def list_chat_days(self, *, student_id: str, limit: int = 60) -> list[str]:
+        sid = str(student_id or "").strip()
+        if not sid:
+            raise ValueError("student_id is empty")
+        limit = max(1, min(int(limit), 365))
+        with self._lock:
+            conn = _connect(self._path)
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT day, MAX(created_at) AS last_ts
+                    FROM chat_messages
+                    WHERE student_id = ?
+                    GROUP BY day
+                    ORDER BY last_ts DESC
+                    LIMIT ?
+                    """,
+                    (sid, int(limit)),
+                ).fetchall()
+                return [str(r["day"]) for r in rows]
             finally:
                 conn.close()
 

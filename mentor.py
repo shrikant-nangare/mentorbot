@@ -145,13 +145,82 @@ def _invoke_openai_chat(prompt: str) -> str:
     except HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"OpenAI chat request failed ({e.code}): {body}") from None
-    data = json.loads(raw or "{}")
+    try:
+        data = json.loads(raw or "{}")
+    except Exception:
+        snippet = (raw or "").strip().replace("\n", " ")[:240]
+        raise RuntimeError(f"OpenAI chat returned non-JSON response: {snippet}") from None
     choices = data.get("choices") or []
     if not isinstance(choices, list) or not choices:
         raise RuntimeError(f"Unexpected /v1/chat/completions response: {data}")
     msg = choices[0].get("message") or {}
     content = msg.get("content", "")
     return str(content or "")
+
+
+def _invoke_openai_chat_json(prompt: str) -> dict:
+    """
+    Same as _invoke_openai_chat(), but asks OpenAI for strict JSON.
+    Only used for api.openai.com to reduce parsing errors.
+    """
+    if not str(getattr(config, "LLM_API_KEY", "") or "").strip():
+        raise RuntimeError("OpenAI API key is not configured (set OPENAI_API_KEY or MENTORBOT_LLM_API_KEY).")
+
+    base = str(config.LLM_BASE_URL).rstrip("/")
+    url = f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+    payload: dict[str, object] = {
+        "model": config.LLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": float(config.LLM_TEMPERATURE),
+        "response_format": {"type": "json_object"},
+    }
+    max_tokens = int(config.LLM_MAX_TOKENS)
+    payload["max_completion_tokens"] = max_tokens
+
+    req = Request(url, data=json.dumps(payload).encode("utf-8"), headers=_openai_headers(), method="POST")
+    try:
+        with urlopen(req, timeout=float(config.LLM_TIMEOUT_S)) as resp:
+            raw = resp.read().decode("utf-8")
+    except HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenAI chat request failed ({e.code}): {body}") from None
+
+    try:
+        data = json.loads(raw or "{}")
+    except Exception:
+        snippet = (raw or "").strip().replace("\n", " ")[:240]
+        raise RuntimeError(f"OpenAI chat returned non-JSON response: {snippet}") from None
+
+    choices = data.get("choices") or []
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError(f"Unexpected /v1/chat/completions response: {data}")
+    msg = choices[0].get("message") or {}
+    content = str(msg.get("content", "") or "")
+    c = content.strip()
+    # Some models may still wrap JSON in code fences; salvage it.
+    if c.startswith("```"):
+        c = re.sub(r"^```[a-zA-Z0-9_-]*\\s*", "", c)
+        c = re.sub(r"\\s*```\\s*$", "", c).strip()
+    try:
+        parsed = json.loads(c or "{}")
+    except Exception:
+        # Try to salvage JSON embedded in extra text.
+        s = c.find("{")
+        e = c.rfind("}")
+        if s != -1 and e != -1 and e > s:
+            try:
+                parsed = json.loads(c[s : e + 1])
+            except Exception:
+                snippet = (c or "").strip().replace("\n", " ")[:240]
+                raise RuntimeError(f"OpenAI JSON mode response was not valid JSON: {snippet}") from None
+        else:
+            snippet = (c or "").strip().replace("\n", " ")[:240]
+            raise RuntimeError(f"OpenAI JSON mode response was not valid JSON: {snippet}") from None
+
+    if isinstance(parsed, dict):
+        return parsed
+    snippet = (c or "").strip().replace("\n", " ")[:240]
+    raise RuntimeError(f"OpenAI JSON mode response was not a JSON object: {snippet}")
 
 
 @lru_cache(maxsize=1)
@@ -349,6 +418,57 @@ def _llm_invoke(prompt: str) -> str:
         raise
 
 
+def classify_subject(question: str) -> str | None:
+    """
+    Best-effort subject classifier for ambiguous prompts.
+    Returns one of: maths, english, science, social_studies, spellings; or None if unclear.
+    """
+    q = str(question or "").strip()
+    if not q:
+        return None
+
+    prompt = f"""
+Classify the user's question into exactly ONE school subject from this list:
+- maths
+- english
+- science
+- social_studies
+- spellings
+
+If it does not fit any of these, return "unknown".
+
+Return ONLY valid JSON:
+{{"subject":"maths|english|science|social_studies|spellings|unknown"}}
+
+User question:
+{q}
+""".strip()
+
+    try:
+        base = str(getattr(config, "LLM_BASE_URL", "") or "").lower()
+        style = str(getattr(config, "LLM_API_STYLE", "") or "").lower()
+        if style in {"openai-chat", "openrouter"} and "api.openai.com" in base:
+            try:
+                data = _invoke_openai_chat_json(prompt)
+            except Exception:
+                raw = _llm_invoke(prompt)
+                data = json.loads(raw or "{}")
+        else:
+            raw = _llm_invoke(prompt)
+            data = json.loads(raw or "{}")
+        subj = str((data or {}).get("subject") or "").strip().lower()
+    except Exception:
+        return None
+
+    if subj in {"math", "maths"}:
+        return "maths"
+    if subj in {"social", "social studies", "social_studies"}:
+        return "social_studies"
+    if subj in {"english", "science", "spellings"}:
+        return subj
+    return None
+
+
 def _doc_source_label(metadata: dict | None) -> str:
     md = metadata or {}
     source = md.get("source") or md.get("file_path") or md.get("filename") or md.get("path") or ""
@@ -388,6 +508,16 @@ def retrieve_context(query: str, k: int = 4, min_relevance: float = 0.25) -> tup
             return (str(cached["context"]), list(cached["sources"]))
 
     try:
+        # If we are using Ollama embeddings implicitly, avoid hanging requests when Ollama
+        # isn't reachable (common in local dev / sandboxed runs). If Ollama is down,
+        # degrade gracefully by returning no retrieval context.
+        emb_style = str(getattr(config, "EMBEDDINGS_API_STYLE", "") or "").strip().lower()
+        if emb_style not in {"openai-embeddings", "openrouter-embeddings"}:
+            try:
+                _ensure_ollama_reachable()
+            except Exception:
+                return ("", [])
+
         hits = get_vectordb().similarity_search_with_relevance_scores(query, k=k)
         # hits: list[tuple[Document, float]] where score is higher = more relevant (0..1)
         for doc, score in hits:
@@ -553,6 +683,45 @@ def _scope_guard_text(subject: str, grade: int) -> str:
     )
 
 
+def _grade_calibration_text(grade: int) -> str:
+    g = max(1, min(int(grade or 1), 12))
+    if g <= 2:
+        return (
+            "Grade calibration:\n"
+            "- Use very simple words and very short sentences.\n"
+            "- Explain ONE idea at a time with a tiny example.\n"
+            "- Avoid jargon; if you must use a new word, define it in plain language.\n"
+            "- Prefer concrete, everyday examples.\n"
+        )
+    if g <= 5:
+        return (
+            "Grade calibration:\n"
+            "- Use simple, clear language (no advanced jargon).\n"
+            "- Give 1–2 short examples.\n"
+            "- Show steps explicitly and ask a small next-step question.\n"
+        )
+    if g <= 8:
+        return (
+            "Grade calibration:\n"
+            "- Use standard school terminology with brief definitions when needed.\n"
+            "- Keep explanations concise; show steps and reasoning.\n"
+            "- Use correct notation (fractions, variables, units) without overcomplicating.\n"
+        )
+    if g <= 10:
+        return (
+            "Grade calibration:\n"
+            "- Use more precise academic vocabulary and correct notation.\n"
+            "- Encourage generalization (patterns, variables, units).\n"
+            "- Include a short extension/challenge ONLY after the main question is addressed.\n"
+        )
+    return (
+        "Grade calibration:\n"
+        "- Use precise, compact explanations with correct terminology.\n"
+        "- Prefer principled reasoning over rote steps.\n"
+        "- Offer optional deeper insight or a harder follow-up when appropriate.\n"
+    )
+
+
 def explain_concept(question: str, history: list[dict] | None = None, subject: str | None = None, grade: int | None = None) -> str:
     history_text = _format_history(history)
     subj = _normalize_subject(subject)
@@ -566,12 +735,14 @@ def explain_concept(question: str, history: list[dict] | None = None, subject: s
     sources_text = ", ".join([s["label"] for s in sources]) if sources else ""
 
     scope = _scope_guard_text(subj, g)
+    grade_cal = _grade_calibration_text(g)
     prompt = f"""
 You are MentorBot, a school tutor.
 
 The user is explicitly asking for a concept explanation. Respond with a clear mini-lesson.
 
 {scope}
+{grade_cal}
 
 Requirements:
 - Write 4 to 5 SHORT paragraphs (separated by blank lines). Aim for 1–3 sentences per paragraph.
@@ -607,11 +778,6 @@ def mentor_response(question: str, history: list[dict] | None = None, subject: s
     if _is_explain_request(question):
         return explain_concept(question, history=history, subject=subject, grade=grade)
 
-    # Deterministic formatting for simple fraction add/sub questions.
-    fraction_guide = _format_fraction_steps_from_question(question)
-    if fraction_guide:
-        return fraction_guide
-
     history_text = _format_history(history)
     problem_type = _infer_problem_type(question)
     retrieval_query = question if not history_text else f"{history_text}\nUser: {question}"
@@ -624,68 +790,42 @@ def mentor_response(question: str, history: list[dict] | None = None, subject: s
     subj = _normalize_subject(subject)
     g = int(grade or 1)
     scope = _scope_guard_text(subj, g)
-    prompt = f"""
+    grade_cal = _grade_calibration_text(g)
+    is_math = subj == "maths"
+    is_science = subj == "science"
+
+    # Deterministic formatting for simple fraction add/sub questions (maths only).
+    if is_math:
+        fraction_guide = _format_fraction_steps_from_question(question)
+        if fraction_guide:
+            return fraction_guide
+
+    sources_text = ", ".join([s["label"] for s in sources]) if sources else ""
+
+    if is_math:
+        prompt = f"""
 You are MentorBot, a school tutor.
 
 Rules:
 {scope}
-- Teach step by step
+{grade_cal}
+- Teach step by step.
+- Ask guiding questions.
+- Encourage thinking.
 - Do NOT give the final numeric/result answer in your reply.
-- Ask guiding questions
-- Encourage thinking
 - Stay on the user's current topic; do not introduce unrelated problems.
-- If the latest user message is a short follow-up (e.g. "make denominator same"), treat it as part of the ongoing conversation.
+- If the latest user message is a short follow-up (e.g. \"make denominator same\"), treat it as part of the ongoing conversation.
 - Use Context only if it is relevant to the user's question; otherwise ignore it.
 - Verify the student's work internally before replying. Do not show hidden reasoning; only show concise checks/explanations.
-- Treat Context as *grounding*: use it to explain concepts more clearly, and avoid contradicting it.
+- Treat Context as grounding: use it to explain concepts more clearly, and avoid contradicting it.
 - If Context seems unrelated to the current question, ignore it rather than changing the topic.
-- For math/science questions (including computations, word problems, or "how does X work?"), start with a short concept primer (1–2 short paragraphs) BEFORE asking the first guiding question.
-- In that primer, use Context if relevant; if Context is empty/unhelpful, use your own general knowledge.
-- For computation/exercise questions, do NOT solve it fully in one reply. After the primer, ask the student for the next step. Only confirm the final answer after the student reaches it.
-- When the user asks an exercise (math/science), give the full set of steps to reach the answer, but leave the last computation/simplification as a blank for the student (e.g., "Now compute ___").
-- If the student provides a final answer, you may confirm whether it is correct and celebrate, but do not reveal the answer first.
-- Tailor the primer to the actual problem type and terminology. Do not introduce the wrong topic (e.g., do not talk about mixed fractions unless the problem contains a mixed fraction like "1 1/2").
-- If the problem is "adding fractions" or "subtracting fractions", focus on least common denominator / equivalent fractions (not mixed numbers).
 
-Conversation style:
-- Keep replies short and sweet (usually 3–8 sentences).
-- Ask ONE clear question at a time.
-- Prefer simple wording over formal wording.
-- Avoid repeating the same rule; only restate if the student is stuck.
-- Celebrate wins briefly when the student is correct, then move to the next small step.
-- Avoid special Unicode punctuation and fraction glyphs (use plain ASCII). For fractions, use LaTeX like \\(\\frac{1}{2}\\) or plain 1/2.
-
-Output structure for exercises:
+Output structure for maths exercises:
 - 1–2 short primer sentences (only if helpful).
 - Then a numbered list of steps (3–6 steps).
-- End with ONE clear next-step question. Do not include the final computed result.
+- End with ONE clear next-step question.
+- STOP before the final arithmetic/simplification; leave the last computation as a blank (e.g., \"Now compute ___\").
 - Use the exact numbers/expressions from the user's question for illustration (do not swap in different numbers).
-- Use mathematical formatting:
-  - Prefer LaTeX fractions like \\(\\frac{1}{2}\\) (not "1/2" unless the user typed only plain text).
-  - Show key transformations as equations using display math blocks: \\[ ... \\].
-  - Avoid stray special characters/glyphs (no emoji, no box-drawing, no odd spacing artifacts).
-
-For adding/subtracting fractions specifically:
-- Identify denominators from the user's fractions, pick the LCD, and explicitly rewrite each fraction to that LCD using the user's numbers.
-- You may show the combined form (e.g., \\(\\frac{2+3}{4}\\)), but STOP before evaluating the final arithmetic (e.g., do not compute \\(2+3\\)).
-
-Correctness & celebration:
-- Only celebrate when the student's step/answer is correct *and relevant to the current problem and your most recent question/sub-goal*.
-- If the student's message is correct but answers a different question than the current sub-goal, acknowledge it briefly ("You're right about X") and redirect back to the current sub-goal ("Here we need Y").
-- If the student gives a correct step or a correct final answer for the current sub-goal, explicitly celebrate it (short, genuine praise).
-- When celebrating, also briefly explain *why* it's correct (1-3 sentences) and offer the next small step or a quick extension question.
-- If the student gives an incorrect step/answer, be kind, say what's off at a high level, and give a hint + a guiding question (do not jump to the final result).
-- If the student provides the correct final answer, you may confirm and then provide a short solution summary (still concise).
-
-Conversation coherence:
-- Keep track of the current problem statement and your last question. Your next reply must address them directly.
-- Do not introduce new numbers, variables, or unrelated examples unless the user asked.
-
-Understanding checks:
-- After explaining a key concept or after a correct step, ask a brief check-for-understanding question.
-- Prefer lightweight checks: "Why does that work?", "What would you do next?", "Can you restate the rule in your own words?"
-- Occasionally use a tiny transfer question (a very similar 1-line example) to confirm understanding, but keep it short and optional.
-- If the student shows strong understanding, reduce the frequency of checks and move forward.
 
 Conversation so far:
 {history_text}
@@ -694,7 +834,7 @@ Context:
 {context}
 
 Context sources (may be empty):
-{", ".join([s["label"] for s in sources]) if sources else ""}
+{sources_text}
 
 Latest user message:
 {question}
@@ -703,7 +843,42 @@ Problem type hint:
 {problem_type}
 
 Response:
-"""
+""".strip()
+        return _llm_invoke(prompt)
+
+    # Non-maths subjects: answer directly (no \"hide the final answer\" rule).
+    subject_style = "science" if is_science else ("english/spellings" if subj in {"english", "spellings"} else "social studies")
+    prompt = f"""
+You are MentorBot, a school tutor.
+
+Rules:
+{scope}
+{grade_cal}
+- Answer the user's question directly and clearly for the selected subject ({subject_style}).
+- It is OK to give the final answer.
+- Keep it concise and correct. Prefer 4–10 sentences total.
+- If the user asks for steps (or it is a process), give short steps/bullets.
+- Use Context only if it is relevant; if Context is empty/unrelated, ignore it.
+- End with ONE short check-for-understanding question or a next-step suggestion.
+- If the question seems to belong to a different school subject than the selected one, say so and suggest the right subject in one sentence.
+
+Conversation so far:
+{history_text}
+
+Context:
+{context}
+
+Context sources (may be empty):
+{sources_text}
+
+Latest user message:
+{question}
+
+Problem type hint:
+{problem_type}
+
+Response:
+""".strip()
 
     return _llm_invoke(prompt)
 
@@ -716,6 +891,7 @@ def generate_mcq_quiz(concept: str, history: list[dict] | None = None, difficult
         difficulty = "medium"
     subj = _normalize_subject(subject)
     g = int(grade or 1)
+    grade_cal = _grade_calibration_text(g)
     # Ground the quiz in the knowledge base if relevant.
     context, _sources = retrieve_context(f"{concept}\n{history_text}".strip(), k=4, min_relevance=0.25)
 
@@ -726,6 +902,7 @@ Scope:
 - Only write quizzes for these subjects: maths, english, science, social studies, spellings.
 - Selected subject: {subj}
 - Grade: {g}
+{grade_cal}
 
 Goal:
 - Create exactly 5 questions to assess understanding of the concept.
@@ -766,18 +943,101 @@ Context (use only if relevant):
 {context}
 """.strip()
 
-    raw = _llm_invoke(prompt)
-    try:
-        quiz = json.loads(raw)
-    except Exception:
-        repair_prompt = f"""
-Fix the following into ONLY valid JSON matching the exact schema above.
-Return ONLY JSON.
+    def _try_parse_json(text: str) -> object | None:
+        if not isinstance(text, str) or not text.strip():
+            return None
+        try:
+            return json.loads(text)
+        except Exception:
+            # Try to salvage JSON embedded in extra text.
+            s = text.find("{")
+            e = text.rfind("}")
+            if s != -1 and e != -1 and e > s:
+                try:
+                    return json.loads(text[s : e + 1])
+                except Exception:
+                    return None
+            return None
 
-Bad output:
-{raw}
+    quiz: object | None = None
+
+    # Primary strategy: rigid pipe-delimited format (more reliable than JSON-only).
+    pipe_prompt = f"""
+You are MentorBot, a tutor creating a short multiple-choice quiz.
+
+Subject: {subj}
+Grade: {g}
+Concept: {concept}
+Difficulty target: {difficulty}
+
+Return EXACTLY 5 lines.
+Each line MUST be in this exact format (use '|||'):
+<question> ||| A) <text> ||| B) <text> ||| C) <text> ||| D) <text> ||| Correct: <A|B|C|D> ||| Explanation: <1 short sentence>
+
+No blank lines. No extra text before or after the 5 lines.
 """.strip()
-        quiz = json.loads(_llm_invoke(repair_prompt))
+
+    pipe_raw = _llm_invoke(pipe_prompt)
+    lines = [ln.strip() for ln in str(pipe_raw or "").splitlines() if "|||" in ln]
+    parsed_questions: list[dict] = []
+    for ln in lines:
+        parts = [p.strip() for p in ln.split("|||")]
+        if len(parts) < 6:
+            continue
+        qtext = parts[0]
+        opts_raw = parts[1:5]
+        corr_raw = " ".join(parts[5:])
+        options: dict[str, str] = {}
+        for p in opts_raw:
+            m = re.match(r"^\s*([A-D])\)\s*(.+)\s*$", p)
+            if not m:
+                continue
+            options[m.group(1)] = m.group(2).strip()
+        m2 = re.search(r"\bCorrect\s*:\s*([A-D])\b", corr_raw, re.IGNORECASE)
+        correct2 = (m2.group(1).upper() if m2 else "")
+        m3 = re.search(r"\bExplanation\s*:\s*(.+)$", corr_raw, re.IGNORECASE)
+        expl = (m3.group(1).strip() if m3 else "Correct because it matches the concept.")
+        if not qtext or len(options) != 4 or correct2 not in {"A", "B", "C", "D"}:
+            continue
+        parsed_questions.append(
+            {
+                "id": f"q{len(parsed_questions) + 1}",
+                "question": qtext,
+                "options": options,
+                "correct": correct2,
+                "explanation": expl[:240],
+            }
+        )
+        if len(parsed_questions) >= 5:
+            break
+    if len(parsed_questions) == 5:
+        quiz = {"title": "Quick check", "questions": parsed_questions}
+
+    # Secondary strategy: JSON prompt (best-effort), but only ONE attempt.
+    if quiz is None:
+        raw = _llm_invoke(prompt)
+        quiz = _try_parse_json(raw)
+
+    if quiz is None:
+        # Absolute fallback: never hard-fail the app; return a safe generic quiz.
+        quiz = {
+            "title": "Quick check",
+            "questions": [
+                {
+                    "id": f"q{i+1}",
+                    "question": f"About this topic: {concept[:80]}",
+                    "options": {
+                        "A": "I understand the main idea",
+                        "B": "I understand some parts",
+                        "C": "I am not sure yet",
+                        "D": "I need a different explanation",
+                    },
+                    "correct": "A",
+                    "explanation": "This is a self-check question to guide what to review next.",
+                }
+                for i in range(5)
+            ],
+        }
 
     if not isinstance(quiz, dict):
         raise ValueError("Quiz output is not a JSON object.")
@@ -827,6 +1087,7 @@ def suggest_topics(subject: str, grade: int, last_concept: str, history: list[di
     """
     subj = (subject or "").strip().lower() or "maths"
     g = int(grade or 1)
+    grade_cal = _grade_calibration_text(g)
     concept = (last_concept or "").strip()
     history_text = _format_history(history)
 
@@ -848,6 +1109,7 @@ You are MentorBot, helping plan what the student should learn next.
 Subject: {subj}
 Grade: {g}
 Last concept: {concept}
+{grade_cal}
 
 Conversation context (may be empty):
 {history_text}
@@ -865,8 +1127,17 @@ Rules:
 """.strip()
 
     try:
-        raw = _llm_invoke(prompt)
-        data = json.loads(raw or "{}")
+        base = str(getattr(config, "LLM_BASE_URL", "") or "").lower()
+        style = str(getattr(config, "LLM_API_STYLE", "") or "").lower()
+        if style in {"openai-chat", "openrouter"} and "api.openai.com" in base:
+            try:
+                data = _invoke_openai_chat_json(prompt)
+            except Exception:
+                raw = _llm_invoke(prompt)
+                data = json.loads(raw or "{}")
+        else:
+            raw = _llm_invoke(prompt)
+            data = json.loads(raw or "{}")
         topics = data.get("topics") if isinstance(data, dict) else None
         if isinstance(topics, list):
             cleaned = []
@@ -882,4 +1153,108 @@ Rules:
     # Fallback: keep a couple generic progressions
     base = fallback.get(subj, ["Review", "Practice", "Next lesson"])
     return base[:4]
+
+
+def group_study_explanation(
+    *,
+    question: str,
+    options: dict[str, str],
+    correct: str,
+    user_responses: list[dict],
+    subject: str | None = None,
+    grade: int | None = None,
+) -> str:
+    """
+    Generates a Kahoot-style group results explanation in a fixed, scan-friendly format.
+    The caller must only invoke this AFTER all required answers are collected.
+    """
+    q = str(question or "").strip()
+    opts = {k: str((options or {}).get(k) or "").strip() for k in ("A", "B", "C", "D")}
+    c = str(correct or "").strip().upper()
+    subj = _normalize_subject(subject)
+    g = int(grade or 1)
+    if not q:
+        raise ValueError("question is empty")
+    if c not in {"A", "B", "C", "D"}:
+        raise ValueError("correct must be A/B/C/D")
+
+    # Precompute distribution for the prompt (LLM still writes the explanation).
+    counts = {k: 0 for k in ("A", "B", "C", "D")}
+    cleaned_responses = []
+    for r in user_responses or []:
+        who = str((r or {}).get("user") or (r or {}).get("pseudonym") or (r or {}).get("student") or "").strip() or "Student"
+        choice = str((r or {}).get("answer") or (r or {}).get("choice") or "").strip().upper()
+        if choice in counts:
+            counts[choice] += 1
+        cleaned_responses.append({"user": who, "answer": choice or ""})
+
+    total = max(1, sum(counts.values()))
+    correct_count = int(counts.get(c, 0))
+    correct_pct = round((correct_count / total) * 100.0, 1)
+
+    scope = _scope_guard_text(subj, g)
+    grade_cal = _grade_calibration_text(g)
+
+    prompt = f"""
+You are MentorBot, an AI tutor facilitating a live group study session.
+
+{scope}
+{grade_cal}
+
+You MUST follow this exact output structure (keep it easy to scan). Address the entire group.
+Do not add extra sections beyond what is listed. Keep the explanation concise.
+
+Context:
+- This is a group session (multiple students answering the same question).
+- The question, correct answer, and user responses are provided below.
+
+Question:
+{q}
+
+Options:
+A) {opts.get("A","")}
+B) {opts.get("B","")}
+C) {opts.get("C","")}
+D) {opts.get("D","")}
+
+Correct Answer: {c}
+
+User responses (user -> answer):
+{json.dumps(cleaned_responses, ensure_ascii=False)}
+
+Precomputed counts:
+{json.dumps(counts, ensure_ascii=False)}
+
+Performance summary:
+- correctCount: {correct_count}
+- totalUsers: {total}
+- correctPercent: {correct_pct}
+
+Rules:
+- Step 1: Summarize results with percentages + user counts for A/B/C/D.
+- Step 2: Highlight the correct answer and right vs wrong counts.
+- Step 3: If many got it wrong (less than 60% correct), explain more simply. If most got it right (80%+), keep it concise and slightly advanced.
+- Step 4: Explain why the correct answer is right, and briefly why common wrong answers are incorrect.
+- Bonus insight is optional.
+
+Output Format (use these exact headings and symbols):
+📊 Results:
+A: X% (Y users)
+B: X% (Y users)
+C: X% (Y users)
+D: X% (Y users)
+
+✅ Correct Answer: <option>
+
+🎯 Performance:
+- X out of Y users answered correctly
+
+🧠 Explanation:
+<clear, structured explanation>
+
+💡 Bonus Insight (optional):
+<extra tip or real-world analogy>
+""".strip()
+
+    return _llm_invoke(prompt).strip()
 
