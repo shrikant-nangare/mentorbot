@@ -3,9 +3,20 @@ import os
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
 
 import config
+from openai_compat_embeddings import OpenAICompatEmbeddings
+
+
+def _embedding_headers() -> dict[str, str]:
+    h: dict[str, str] = {}
+    ref = str(getattr(config, "HTTP_REFERER_OPTIONAL", "") or "").strip()
+    title = str(getattr(config, "HTTP_TITLE_OPTIONAL", "") or "").strip()
+    if ref:
+        h["HTTP-Referer"] = ref
+    if title:
+        h["X-Title"] = title
+    return h
 
 
 def ingest_pdfs(folder_path="data"):
@@ -35,24 +46,21 @@ def ingest_pdfs(folder_path="data"):
     split_docs = splitter.split_documents(docs)
     print(f"✂️ Split into {len(split_docs)} chunks")
 
-    # Create vector DB
-    embed_kwargs = {
-        "model": config.OLLAMA_EMBED_MODEL,
-        "base_url": config.OLLAMA_BASE_URL,
-        "keep_alive": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0) or 0),
-    }
-    # If you switch embeddings to an OpenAI-compatible endpoint, update ingest.py similarly
-    # or run ingestion through the app path.
-    num_ctx = int(getattr(config, "OLLAMA_NUM_CTX", 0) or 0)
-    if num_ctx > 0:
-        embed_kwargs["num_ctx"] = num_ctx
+    base_url = (getattr(config, "EMBEDDINGS_BASE_URL", "") or getattr(config, "LLM_BASE_URL", "")).rstrip("/")
+    api_key = str(getattr(config, "EMBEDDINGS_API_KEY", "") or "").strip()
+
     vectordb = Chroma(
         persist_directory=config.DB_DIR,
-        embedding_function=OllamaEmbeddings(**embed_kwargs)
+        embedding_function=OpenAICompatEmbeddings(
+            base_url=base_url,
+            api_key=api_key,
+            model=str(getattr(config, "EMBEDDINGS_MODEL", "text-embedding-3-small") or "text-embedding-3-small"),
+            timeout_s=float(getattr(config, "LLM_TIMEOUT_S", 120.0)),
+            extra_headers=_embedding_headers(),
+        ),
     )
 
     vectordb.add_documents(split_docs)
-    #vectordb.persist()
 
     print("🎉 PDFs ingested successfully into vector DB!")
 

@@ -15,7 +15,8 @@ COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip \
     && pip install -r /app/requirements.txt
 
-COPY app.py app_db.py security.py config.py mentor.py ingest.py persistent_cache.py openai_compat_embeddings.py /app/
+COPY app.py app_db.py security.py config.py curriculum.py mentor.py ingest.py persistent_cache.py openai_compat_embeddings.py /app/
+COPY data/curriculum.json /app/data/curriculum.json
 COPY web/ /app/web/
 
 # Create a non-root user

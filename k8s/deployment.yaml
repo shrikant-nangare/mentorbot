@@ -27,9 +27,6 @@ spec:
             - configMapRef:
                 name: mentorbot-config
             - secretRef:
-                name: mentorbot-openrouter
-                optional: true
-            - secretRef:
                 name: mentorbot-openai
                 optional: true
           readinessProbe:

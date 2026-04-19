@@ -44,6 +44,11 @@
   const quizResult = document.getElementById('quizResult');
 
   const gradeSelect = document.getElementById('gradeSelect');
+  const subjectSelect = document.getElementById('subjectSelect');
+  const topicRail = document.getElementById('topicRail');
+  const topicRailAside = document.getElementById('topicRailAside');
+  const topicsDrawerToggle = document.getElementById('topicsDrawerToggle');
+  const topicRailCloseBtn = document.getElementById('topicRailCloseBtn');
   const themeBtn = document.getElementById('themeBtn');
   const notesBtn = document.getElementById('notesBtn');
   const notesModal = document.getElementById('notesModal');
@@ -97,6 +102,8 @@
   let gateConceptId = '';
   let gateSubject = 'maths';
   let gateGrade = 1;
+
+  let persistPrefsTimer = null;
 
   let activeNoteId = '';
 
@@ -221,9 +228,129 @@
   // Init theme early (before rendering)
   applyTheme(localStorage.getItem('mb_theme') || 'auto');
 
+  function normalizeSubject(subj) {
+    let s = String(subj || 'maths').trim().toLowerCase().replace(/\s+/g, '_');
+    const aliases = {
+      maths: 'maths',
+      mathematics: 'maths',
+      math: 'maths',
+      english: 'english',
+      ela: 'english',
+      science: 'science',
+      social_studies: 'social_studies',
+      spellings: 'spellings',
+      spelling: 'spellings'
+    };
+    const mapped = aliases[s] || s;
+    const allowed = ['maths', 'english', 'science', 'social_studies', 'spellings'];
+    return allowed.includes(mapped) ? mapped : 'maths';
+  }
+
+  function starterPrompt(unitTitle, label) {
+    const u = String(unitTitle || '').trim();
+    const lab = String(label || '').trim();
+    if (u && lab) return `${u} — Let's discuss: ${lab}`;
+    return `Let's study: ${lab}`;
+  }
+
+  function setTopicRailOpen(open) {
+    if (!topicRailAside) return;
+    topicRailAside.classList.toggle('topicRailAsideOpen', !!open);
+    if (topicsDrawerToggle) {
+      topicsDrawerToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+  }
+
+  function renderTopicRail(data) {
+    if (!topicRail) return;
+    topicRail.innerHTML = '';
+    const units = data && Array.isArray(data.units) ? data.units : [];
+    if (!units.length) {
+      const p = document.createElement('p');
+      p.className = 'topicRailHint';
+      p.textContent = 'No topics for this grade and subject yet.';
+      topicRail.appendChild(p);
+      return;
+    }
+    units.forEach((unit) => {
+      const ut = document.createElement('div');
+      ut.className = 'topicRailUnitTitle';
+      ut.textContent = unit.title || 'Unit';
+      topicRail.appendChild(ut);
+      const wrap = document.createElement('div');
+      wrap.className = 'topicRailChipWrap';
+      (unit.topics || []).forEach((tp) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btnSmall';
+        btn.textContent = tp.label;
+        btn.title = 'Click to send · Right-click to paste only';
+        btn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          if (gateActive) {
+            addMessage('system', 'Topics', 'Quiz required to continue (pass or skip).');
+            return;
+          }
+          const text = starterPrompt(unit.title, tp.label);
+          setTopicRailOpen(false);
+          Promise.resolve(sendMessage(text)).catch(() => {});
+        });
+        btn.addEventListener('contextmenu', (ev) => {
+          ev.preventDefault();
+          if (gateActive) return;
+          input.value = starterPrompt(unit.title, tp.label);
+          input.focus();
+        });
+        wrap.appendChild(btn);
+      });
+      topicRail.appendChild(wrap);
+    });
+  }
+
+  async function loadTopicRail() {
+    if (!topicRail) return;
+    if (!sessionToken) {
+      topicRail.innerHTML = '<p class="topicRailHint">Log in to browse curriculum topics.</p>';
+      return;
+    }
+    topicRail.innerHTML = '<p class="topicRailHint">Loading…</p>';
+    try {
+      const resp = await fetch(
+        `/topics?grade=${encodeURIComponent(String(gateGrade))}&subject=${encodeURIComponent(gateSubject)}`,
+        { headers: authHeaders() }
+      );
+      if (!resp.ok) {
+        const t = await resp.text();
+        topicRail.innerHTML = '';
+        const p = document.createElement('p');
+        p.className = 'topicRailHint';
+        p.textContent = `Could not load topics (${resp.status}). ${t}`;
+        topicRail.appendChild(p);
+        return;
+      }
+      const data = await resp.json();
+      renderTopicRail(data);
+    } catch (err) {
+      topicRail.innerHTML = '';
+      const p = document.createElement('p');
+      p.className = 'topicRailHint';
+      p.textContent = String(err && err.message ? err.message : err);
+      topicRail.appendChild(p);
+    }
+  }
+
+  function setSubject(subj, opts) {
+    gateSubject = normalizeSubject(subj);
+    if (subjectSelect) subjectSelect.value = gateSubject;
+    loadTopicRail();
+    const persist = !(opts && opts.persist === false);
+    if (persist) schedulePersistPrefs();
+  }
+
   function setActiveSubjectImplicit(subj) {
-    const s = String(subj || 'maths').toLowerCase();
-    gateSubject = s;
+    gateSubject = normalizeSubject(subj);
+    if (subjectSelect) subjectSelect.value = gateSubject;
+    loadTopicRail();
   }
 
   function setGrade(g) {
@@ -238,9 +365,17 @@
       await fetch('/me', {
         method: 'PATCH',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ grade: gateGrade })
+        body: JSON.stringify({ grade: gateGrade, subjectPref: gateSubject })
       });
     } catch (_) {}
+  }
+
+  function schedulePersistPrefs() {
+    if (!sessionToken) return;
+    clearTimeout(persistPrefsTimer);
+    persistPrefsTimer = setTimeout(() => {
+      persistProfilePrefs();
+    }, 400);
   }
 
   const AVATAR_STYLES = {
@@ -362,6 +497,7 @@
       if (currentProfile) {
         setWallpaper(currentProfile.wallpaperKey || 'space_01');
         setGrade(currentProfile.grade || 1);
+        setSubject(currentProfile.subjectPref || 'maths', { persist: false });
         return true;
       }
     } catch (_) {
@@ -396,8 +532,10 @@
       currentProfile = data.profile || null;
       setWallpaper((currentProfile && currentProfile.wallpaperKey) ? currentProfile.wallpaperKey : 'space_01');
       setGrade((currentProfile && currentProfile.grade) ? currentProfile.grade : (student.grade || 1));
+      setSubject((currentProfile && currentProfile.subjectPref) || 'maths', { persist: false });
       showAuth(false);
       addMessage('system', 'Welcome', `Hi ${currentProfile && currentProfile.pseudonym ? currentProfile.pseudonym : 'student'}!`);
+      loadTopicRail();
       return;
     }
 
@@ -419,8 +557,10 @@
     currentProfile = data.profile || null;
     setWallpaper((currentProfile && currentProfile.wallpaperKey) ? currentProfile.wallpaperKey : 'space_01');
     setGrade((currentProfile && currentProfile.grade) ? currentProfile.grade : (student.grade || 1));
+    setSubject((currentProfile && currentProfile.subjectPref) || 'maths', { persist: false });
     showAuth(false);
     addMessage('system', 'Welcome', `Hi ${currentProfile && currentProfile.pseudonym ? currentProfile.pseudonym : 'student'}!`);
+    loadTopicRail();
   }
 
   function updateMathStatus(status) {
@@ -895,8 +1035,25 @@
   if (gradeSelect) {
     gradeSelect.addEventListener('change', () => {
       setGrade(gradeSelect.value);
-      persistProfilePrefs();
+      loadTopicRail();
+      schedulePersistPrefs();
     });
+  }
+
+  if (subjectSelect) {
+    subjectSelect.addEventListener('change', () => {
+      setSubject(subjectSelect.value);
+    });
+  }
+
+  if (topicsDrawerToggle && topicRailAside) {
+    topicsDrawerToggle.addEventListener('click', () => {
+      const on = topicRailAside.classList.contains('topicRailAsideOpen');
+      setTopicRailOpen(!on);
+    });
+  }
+  if (topicRailCloseBtn && topicRailAside) {
+    topicRailCloseBtn.addEventListener('click', () => setTopicRailOpen(false));
   }
 
   if (themeBtn) {
@@ -1427,6 +1584,7 @@
     } else {
       showAuth(false);
       addMessage('system', 'Welcome back', `Hi ${currentProfile && currentProfile.pseudonym ? currentProfile.pseudonym : 'student'}!`);
+      loadTopicRail();
     }
   })();
 

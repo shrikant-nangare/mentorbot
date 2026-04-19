@@ -8,7 +8,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings, OllamaLLM
 
 import config
 from persistent_cache import CacheConfig, SqliteCache
@@ -44,6 +43,17 @@ def _cache_key(prefix: str, payload: dict) -> str:
     return f"{prefix}:{h}"
 
 
+def _optional_provider_headers() -> dict[str, str]:
+    h: dict[str, str] = {}
+    ref = str(getattr(config, "HTTP_REFERER_OPTIONAL", "") or "").strip()
+    title = str(getattr(config, "HTTP_TITLE_OPTIONAL", "") or "").strip()
+    if ref:
+        h["HTTP-Referer"] = ref
+    if title:
+        h["X-Title"] = title
+    return h
+
+
 def _http_ok(url: str, method: str = "GET") -> bool:
     try:
         headers = {"Accept": "application/json"}
@@ -51,7 +61,7 @@ def _http_ok(url: str, method: str = "GET") -> bool:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         req = Request(url, headers=headers, method=method)
-        with urlopen(req, timeout=float(config.OLLAMA_CONNECT_TIMEOUT_S)) as resp:
+        with urlopen(req, timeout=float(getattr(config, "HTTP_CONNECT_TIMEOUT_S", 2.0))) as resp:
             status = getattr(resp, "status", 200)
             return 200 <= int(status) < 300
     except HTTPError as e:
@@ -65,12 +75,6 @@ def _http_ok(url: str, method: str = "GET") -> bool:
         return False
 
 
-def ollama_is_reachable() -> bool:
-    base = str(config.OLLAMA_BASE_URL).rstrip("/")
-    # Native Ollama reliably exposes GET /api/tags.
-    return _http_ok(f"{base}/api/tags", method="GET")
-
-
 def openai_completions_is_reachable() -> bool:
     base = str(config.LLM_BASE_URL).rstrip("/")
     if base.endswith("/v1"):
@@ -78,21 +82,11 @@ def openai_completions_is_reachable() -> bool:
     return _http_ok(f"{base}/v1/models", method="GET")
 
 
-def _ensure_ollama_reachable() -> None:
-    if not ollama_is_reachable():
-        raise RuntimeError(
-            f"Ollama is not reachable at {config.OLLAMA_BASE_URL} ({config.OLLAMA_HOST}:{config.OLLAMA_PORT}). "
-            f"Make sure you're pointing at the Ollama server URL (it must expose /api/tags and /api/embed). "
-            f"If you're using Open WebUI (often :8080), the Ollama API is typically :11434."
-        )
-
-
 def _ensure_openai_completions_reachable() -> None:
-    # For OpenAI/OpenRouter base URLs, "reachability" without a key often returns 401/403.
-    # Provide a clearer error in that case.
+    # For api.openai.com, "reachability" without a key often returns 401/403.
     base = str(getattr(config, "LLM_BASE_URL", "") or "").strip()
-    if ("api.openai.com" in base or "openrouter.ai" in base) and not str(getattr(config, "LLM_API_KEY", "") or "").strip():
-        raise RuntimeError("OpenAI/OpenRouter API key is not configured (set OPENAI_API_KEY or MENTORBOT_LLM_API_KEY).")
+    if "api.openai.com" in base.lower() and not str(getattr(config, "LLM_API_KEY", "") or "").strip():
+        raise RuntimeError("OpenAI API key is not configured (set OPENAI_API_KEY or MENTORBOT_LLM_API_KEY).")
 
     if not openai_completions_is_reachable():
         raise RuntimeError(
@@ -107,20 +101,13 @@ def _openai_headers() -> dict[str, str]:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    # OpenRouter-specific optional metadata headers (safe for other providers too).
-    site = str(getattr(config, "OPENROUTER_SITE_URL", "") or "").strip()
-    title = str(getattr(config, "OPENROUTER_APP_NAME", "") or "").strip()
-    if site:
-        headers["HTTP-Referer"] = site
-    if title:
-        headers["X-Title"] = title
+    headers.update(_optional_provider_headers())
     return headers
 
 
 def _invoke_openai_chat(prompt: str) -> str:
     """
-    OpenAI-compatible chat completion endpoint.
-    Works with OpenRouter when base_url is https://openrouter.ai/api/v1.
+    OpenAI-compatible POST /v1/chat/completions (or /chat/completions when base ends with /v1).
     """
     if not str(getattr(config, "LLM_API_KEY", "") or "").strip():
         raise RuntimeError("OpenAI API key is not configured (set OPENAI_API_KEY or MENTORBOT_LLM_API_KEY).")
@@ -225,68 +212,19 @@ def _invoke_openai_chat_json(prompt: str) -> dict:
 
 @lru_cache(maxsize=1)
 def get_vectordb() -> Chroma:
-    emb_style = str(getattr(config, "EMBEDDINGS_API_STYLE", "") or "").strip().lower()
-    if emb_style in {"openai-embeddings", "openrouter-embeddings"}:
-        base_url = (getattr(config, "EMBEDDINGS_BASE_URL", "") or getattr(config, "LLM_BASE_URL", "")).rstrip("/")
-        api_key = str(getattr(config, "EMBEDDINGS_API_KEY", "") or getattr(config, "LLM_API_KEY", "")).strip()
-        embedding_function = OpenAICompatEmbeddings(
-            base_url=base_url,
-            api_key=api_key,
-            model=str(getattr(config, "EMBEDDINGS_MODEL", "text-embedding-3-small") or "text-embedding-3-small"),
-            timeout_s=float(getattr(config, "LLM_TIMEOUT_S", 30.0)),
-            extra_headers={
-                "HTTP-Referer": str(getattr(config, "OPENROUTER_SITE_URL", "") or ""),
-                "X-Title": str(getattr(config, "OPENROUTER_APP_NAME", "") or ""),
-            },
-        )
-    else:
-        embed_kwargs = {
-            "model": config.OLLAMA_EMBED_MODEL,
-            "base_url": config.OLLAMA_BASE_URL,
-            "keep_alive": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0) or 0),
-        }
-        num_ctx = int(getattr(config, "OLLAMA_NUM_CTX", 0) or 0)
-        if num_ctx > 0:
-            embed_kwargs["num_ctx"] = num_ctx
-        embedding_function = OllamaEmbeddings(**embed_kwargs)
+    base_url = (getattr(config, "EMBEDDINGS_BASE_URL", "") or getattr(config, "LLM_BASE_URL", "")).rstrip("/")
+    api_key = str(getattr(config, "EMBEDDINGS_API_KEY", "") or "").strip()
+    embedding_function = OpenAICompatEmbeddings(
+        base_url=base_url,
+        api_key=api_key,
+        model=str(getattr(config, "EMBEDDINGS_MODEL", "text-embedding-3-small") or "text-embedding-3-small"),
+        timeout_s=float(getattr(config, "LLM_TIMEOUT_S", 30.0)),
+        extra_headers=_optional_provider_headers(),
+    )
     return Chroma(
         persist_directory=config.DB_DIR,
         embedding_function=embedding_function,
     )
-
-
-@lru_cache(maxsize=1)
-def _get_llm_primary() -> OllamaLLM:
-    llm_kwargs = {
-        "model": config.OLLAMA_LLM_MODEL,
-        "base_url": config.OLLAMA_BASE_URL,
-        "keep_alive": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0) or 0),
-    }
-    num_ctx = int(getattr(config, "OLLAMA_NUM_CTX", 0) or 0)
-    num_predict = int(getattr(config, "OLLAMA_NUM_PREDICT", 0) or 0)
-    if num_ctx > 0:
-        llm_kwargs["num_ctx"] = num_ctx
-    if num_predict > 0:
-        llm_kwargs["num_predict"] = num_predict
-    return OllamaLLM(**llm_kwargs)
-
-
-@lru_cache(maxsize=1)
-def _get_llm_fallback() -> OllamaLLM:
-    if config.OLLAMA_LLM_FALLBACK_MODEL == config.OLLAMA_LLM_MODEL:
-        return _get_llm_primary()
-    llm_kwargs = {
-        "model": config.OLLAMA_LLM_FALLBACK_MODEL,
-        "base_url": config.OLLAMA_BASE_URL,
-        "keep_alive": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0) or 0),
-    }
-    num_ctx = int(getattr(config, "OLLAMA_NUM_CTX", 0) or 0)
-    num_predict = int(getattr(config, "OLLAMA_NUM_PREDICT", 0) or 0)
-    if num_ctx > 0:
-        llm_kwargs["num_ctx"] = num_ctx
-    if num_predict > 0:
-        llm_kwargs["num_predict"] = num_predict
-    return OllamaLLM(**llm_kwargs)
 
 
 def _normalize_text_for_chat(text: str) -> str:
@@ -344,11 +282,6 @@ def _llm_invoke(prompt: str) -> str:
             {
                 "style": str(getattr(config, "LLM_API_STYLE", "")),
                 "prompt": prompt,
-                "ollama_base_url": str(getattr(config, "OLLAMA_BASE_URL", "")),
-                "ollama_model": str(getattr(config, "OLLAMA_LLM_MODEL", "")),
-                "ollama_keep_alive_s": int(getattr(config, "OLLAMA_KEEP_ALIVE_S", 0)),
-                "ollama_num_ctx": int(getattr(config, "OLLAMA_NUM_CTX", 0)),
-                "ollama_num_predict": int(getattr(config, "OLLAMA_NUM_PREDICT", 0)),
                 "openai_base_url": str(getattr(config, "LLM_BASE_URL", "")),
                 "openai_model": str(getattr(config, "LLM_MODEL", "")),
             },
@@ -366,7 +299,7 @@ def _llm_invoke(prompt: str) -> str:
                 return hit_text
 
     style = (config.LLM_API_STYLE or "").strip().lower()
-    if style in {"openai-chat", "openrouter"}:
+    if style == "openai-chat":
         out = _normalize_text_for_chat(_invoke_openai_chat(prompt))
         if not out.strip():
             out = _normalize_text_for_chat(_invoke_openai_chat(prompt))
@@ -387,35 +320,10 @@ def _llm_invoke(prompt: str) -> str:
             cache.set(key, out)
         return out
 
-    try:
-        _ensure_ollama_reachable()
-        out = _normalize_text_for_chat(_get_llm_primary().invoke(prompt))
-        if not out.strip():
-            # One retry in case the backend produced an empty completion.
-            out = _normalize_text_for_chat(_get_llm_primary().invoke(prompt))
-        if not out.strip():
-            raise RuntimeError("LLM returned an empty response.")
-        if cache is not None and key is not None:
-            cache.set(key, out)
-        return out
-    except Exception as e:
-        msg = str(e).lower()
-        model_missing = ("model" in msg and ("not found" in msg or "pull" in msg or "unknown" in msg))
-        if model_missing and config.OLLAMA_LLM_FALLBACK_MODEL != config.OLLAMA_LLM_MODEL:
-            logger.warning(
-                "Primary Ollama model unavailable; falling back",
-                extra={"primary_model": config.OLLAMA_LLM_MODEL, "fallback_model": config.OLLAMA_LLM_FALLBACK_MODEL},
-            )
-            _ensure_ollama_reachable()
-            out = _normalize_text_for_chat(_get_llm_fallback().invoke(prompt))
-            if not out.strip():
-                out = _normalize_text_for_chat(_get_llm_fallback().invoke(prompt))
-            if not out.strip():
-                raise RuntimeError("LLM returned an empty response.")
-            if cache is not None and key is not None:
-                cache.set(key, out)
-            return out
-        raise
+    raise RuntimeError(
+        f"Unsupported LLM_API_STYLE {style!r}. Use 'openai-chat' or 'openai-completions' "
+        f"(MENTORBOT_LLM_API_STYLE / LLM_API_STYLE)."
+    )
 
 
 def classify_subject(question: str) -> str | None:
@@ -447,7 +355,7 @@ User question:
     try:
         base = str(getattr(config, "LLM_BASE_URL", "") or "").lower()
         style = str(getattr(config, "LLM_API_STYLE", "") or "").lower()
-        if style in {"openai-chat", "openrouter"} and "api.openai.com" in base:
+        if style == "openai-chat" and "api.openai.com" in base:
             try:
                 data = _invoke_openai_chat_json(prompt)
             except Exception:
@@ -499,8 +407,10 @@ def retrieve_context(query: str, k: int = 4, min_relevance: float = 0.25) -> tup
                 "k": int(k),
                 "min_relevance": float(min_relevance),
                 "db_dir": str(config.DB_DIR),
-                "embed_model": str(config.OLLAMA_EMBED_MODEL),
-                "ollama_base_url": str(config.OLLAMA_BASE_URL),
+                "embeddings_model": str(getattr(config, "EMBEDDINGS_MODEL", "")),
+                "embeddings_base_url": str(
+                    getattr(config, "EMBEDDINGS_BASE_URL", "") or getattr(config, "LLM_BASE_URL", "")
+                ),
             },
         )
         cached = cache.get_json(rkey)
@@ -508,16 +418,6 @@ def retrieve_context(query: str, k: int = 4, min_relevance: float = 0.25) -> tup
             return (str(cached["context"]), list(cached["sources"]))
 
     try:
-        # If we are using Ollama embeddings implicitly, avoid hanging requests when Ollama
-        # isn't reachable (common in local dev / sandboxed runs). If Ollama is down,
-        # degrade gracefully by returning no retrieval context.
-        emb_style = str(getattr(config, "EMBEDDINGS_API_STYLE", "") or "").strip().lower()
-        if emb_style not in {"openai-embeddings", "openrouter-embeddings"}:
-            try:
-                _ensure_ollama_reachable()
-            except Exception:
-                return ("", [])
-
         hits = get_vectordb().similarity_search_with_relevance_scores(query, k=k)
         # hits: list[tuple[Document, float]] where score is higher = more relevant (0..1)
         for doc, score in hits:
@@ -1129,7 +1029,7 @@ Rules:
     try:
         base = str(getattr(config, "LLM_BASE_URL", "") or "").lower()
         style = str(getattr(config, "LLM_API_STYLE", "") or "").lower()
-        if style in {"openai-chat", "openrouter"} and "api.openai.com" in base:
+        if style == "openai-chat" and "api.openai.com" in base:
             try:
                 data = _invoke_openai_chat_json(prompt)
             except Exception:

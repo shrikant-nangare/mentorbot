@@ -28,6 +28,7 @@ warnings.filterwarnings(
 )
 
 import config
+import curriculum as curriculum_loader
 from mentor import (
     classify_subject,
     generate_mcq_quiz,
@@ -593,17 +594,32 @@ def health_app():
     }
 
 
+@app.get("/topics")
+def get_topics(request: Request, grade: int = 1, subject: str = "maths"):
+    """
+    Static curriculum topics for the topic rail (grade 1–12 + internal subject key).
+    """
+    _ = _require_student(request)
+    try:
+        g = int(grade)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid grade.")
+    if g < 1 or g > 12:
+        raise HTTPException(status_code=400, detail="Grade must be 1–12.")
+    sk = str(subject or "").strip().lower()
+    return curriculum_loader.topics_payload_for_grade_subject(g, sk)
+
+
 @app.get("/health/models")
 def health_models():
+    emb_base = getattr(config, "EMBEDDINGS_BASE_URL", "") or getattr(config, "LLM_BASE_URL", None)
     return {
         "llmApiStyle": getattr(config, "LLM_API_STYLE", None),
         "llmBaseUrl": getattr(config, "LLM_BASE_URL", None),
         "llmModel": getattr(config, "LLM_MODEL", None),
         "llmTimeoutS": getattr(config, "LLM_TIMEOUT_S", None),
-        "ollamaEmbedModel": config.OLLAMA_EMBED_MODEL,
-        "ollamaLlmModel": config.OLLAMA_LLM_MODEL,
-        "ollamaLlmFallbackModel": config.OLLAMA_LLM_FALLBACK_MODEL,
-        "ollamaBaseUrl": getattr(config, "OLLAMA_BASE_URL", None),
+        "embeddingsBaseUrl": emb_base,
+        "embeddingsModel": getattr(config, "EMBEDDINGS_MODEL", None),
         "dbDir": config.DB_DIR,
     }
 

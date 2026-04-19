@@ -1,0 +1,708 @@
+{
+  "curriculum": [
+    {
+      "grade": "1",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Operations and Algebraic Thinking",
+              "topics": [
+                "Addition within 20",
+                "Subtraction within 20",
+                "Word Problems"
+              ]
+            },
+            {
+              "unit": "Number and Operations",
+              "topics": [
+                "Place Value (Tens, Ones)",
+                "Counting to 120"
+              ]
+            },
+            {
+              "unit": "Measurement and Data",
+              "topics": [
+                "Length",
+                "Time",
+                "Money"
+              ]
+            },
+            {
+              "unit": "Geometry",
+              "topics": [
+                "Shapes",
+                "Spatial Reasoning"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Life Science",
+              "topics": [
+                "Plants",
+                "Animals"
+              ]
+            },
+            {
+              "unit": "Physical Science",
+              "topics": [
+                "Light",
+                "Sound"
+              ]
+            },
+            {
+              "unit": "Earth Science",
+              "topics": [
+                "Weather",
+                "Seasons"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "ELA",
+          "units": [
+            {
+              "unit": "Reading",
+              "topics": [
+                "Phonics",
+                "Comprehension"
+              ]
+            },
+            {
+              "unit": "Writing",
+              "topics": [
+                "Sentence Writing",
+                "Narratives"
+              ]
+            },
+            {
+              "unit": "Language",
+              "topics": [
+                "Grammar",
+                "Vocabulary"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "Civics",
+              "topics": [
+                "Rules",
+                "Citizenship"
+              ]
+            },
+            {
+              "unit": "Geography",
+              "topics": [
+                "Maps",
+                "Locations"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "2",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Operations",
+              "topics": [
+                "Addition/Subtraction within 100",
+                "Word Problems"
+              ]
+            },
+            {
+              "unit": "Number System",
+              "topics": [
+                "Place Value (Hundreds)"
+              ]
+            },
+            {
+              "unit": "Measurement",
+              "topics": [
+                "Time",
+                "Money",
+                "Length"
+              ]
+            },
+            {
+              "unit": "Data",
+              "topics": [
+                "Bar Graphs",
+                "Picture Graphs"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Life Science",
+              "topics": [
+                "Plant Growth",
+                "Habitats"
+              ]
+            },
+            {
+              "unit": "Physical Science",
+              "topics": [
+                "Forces",
+                "Motion"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "ELA",
+          "units": [
+            {
+              "unit": "Reading",
+              "topics": [
+                "Main Idea",
+                "Details"
+              ]
+            },
+            {
+              "unit": "Writing",
+              "topics": [
+                "Paragraph Writing"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "Communities",
+              "topics": [
+                "Local Government",
+                "Citizenship"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "3",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Operations",
+              "topics": [
+                "Multiplication",
+                "Division"
+              ]
+            },
+            {
+              "unit": "Fractions",
+              "topics": [
+                "Basic Fractions"
+              ]
+            },
+            {
+              "unit": "Geometry",
+              "topics": [
+                "Area",
+                "Perimeter"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Life Science",
+              "topics": [
+                "Ecosystems"
+              ]
+            },
+            {
+              "unit": "Earth Science",
+              "topics": [
+                "Water Cycle"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "ELA",
+          "units": [
+            {
+              "unit": "Reading",
+              "topics": [
+                "Story Analysis"
+              ]
+            },
+            {
+              "unit": "Writing",
+              "topics": [
+                "Opinion Writing"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "Geography",
+              "topics": [
+                "Regions of USA"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "4",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Operations",
+              "topics": [
+                "Multi-digit Multiplication",
+                "Division"
+              ]
+            },
+            {
+              "unit": "Fractions",
+              "topics": [
+                "Equivalent Fractions"
+              ]
+            },
+            {
+              "unit": "Geometry",
+              "topics": [
+                "Angles"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Physical Science",
+              "topics": [
+                "Energy"
+              ]
+            },
+            {
+              "unit": "Earth Science",
+              "topics": [
+                "Earth Layers"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "ELA",
+          "units": [
+            {
+              "unit": "Writing",
+              "topics": [
+                "Essay Writing"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "History",
+              "topics": [
+                "Early US History"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "5",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Fractions",
+              "topics": [
+                "Operations with Fractions"
+              ]
+            },
+            {
+              "unit": "Decimals",
+              "topics": [
+                "Decimal Operations"
+              ]
+            },
+            {
+              "unit": "Measurement",
+              "topics": [
+                "Volume"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Life Science",
+              "topics": [
+                "Human Body"
+              ]
+            },
+            {
+              "unit": "Earth Science",
+              "topics": [
+                "Solar System"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "ELA",
+          "units": [
+            {
+              "unit": "Reading",
+              "topics": [
+                "Comparative Texts"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "History",
+              "topics": [
+                "American Revolution"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "6",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Ratios",
+              "topics": [
+                "Ratios",
+                "Unit Rates"
+              ]
+            },
+            {
+              "unit": "Expressions",
+              "topics": [
+                "Algebraic Expressions"
+              ]
+            },
+            {
+              "unit": "Statistics",
+              "topics": [
+                "Mean",
+                "Median"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Life Science",
+              "topics": [
+                "Cells"
+              ]
+            },
+            {
+              "unit": "Earth Science",
+              "topics": [
+                "Earth Systems"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "ELA",
+          "units": [
+            {
+              "unit": "Writing",
+              "topics": [
+                "Argument Writing"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "World History",
+              "topics": [
+                "Ancient Civilizations"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "7",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Proportions",
+              "topics": [
+                "Proportional Relationships"
+              ]
+            },
+            {
+              "unit": "Geometry",
+              "topics": [
+                "Area",
+                "Volume"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Life Science",
+              "topics": [
+                "Genetics"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "ELA",
+          "units": [
+            {
+              "unit": "Reading",
+              "topics": [
+                "Literary Analysis"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "World History",
+              "topics": [
+                "Medieval Times"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "8",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Algebra",
+              "topics": [
+                "Linear Equations"
+              ]
+            },
+            {
+              "unit": "Geometry",
+              "topics": [
+                "Pythagorean Theorem"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Physical Science",
+              "topics": [
+                "Forces",
+                "Motion"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "US History",
+              "topics": [
+                "Civil War"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "9",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Algebra 1",
+              "topics": [
+                "Linear Equations",
+                "Functions"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Biology",
+              "topics": [
+                "Cells",
+                "Genetics"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "World History",
+              "topics": [
+                "Industrial Revolution"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "10",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Geometry",
+              "topics": [
+                "Proofs",
+                "Triangles"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Science",
+          "units": [
+            {
+              "unit": "Chemistry",
+              "topics": [
+                "Atoms",
+                "Reactions"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "11",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Algebra 2",
+              "topics": [
+                "Quadratics",
+                "Logarithms"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "US History",
+              "topics": [
+                "Modern America"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "grade": "12",
+      "subjects": [
+        {
+          "subject": "Mathematics",
+          "units": [
+            {
+              "unit": "Advanced Math",
+              "topics": [
+                "Calculus",
+                "Statistics"
+              ]
+            }
+          ]
+        },
+        {
+          "subject": "Social Studies",
+          "units": [
+            {
+              "unit": "Civics",
+              "topics": [
+                "Government",
+                "Economics"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

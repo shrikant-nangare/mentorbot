@@ -7,7 +7,7 @@
 
     <link rel="icon" href="/static/logo.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/katex/katex.min.css" />
-    <link rel="stylesheet" href="/static/app.css?v=2026-04-03" />
+    <link rel="stylesheet" href="/static/app.css?v=2026-04-19" />
   </head>
   <body>
     <div id="authScreen" class="authScreen" style="display:none;" aria-live="polite">
@@ -214,6 +214,17 @@
                 <option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
               </select>
             </div>
+            <div class="gradeBox">
+              <span class="hint" style="margin:0;">Subject</span>
+              <select id="subjectSelect" class="selectInput" aria-label="Subject">
+                <option value="maths">Mathematics</option>
+                <option value="english">ELA</option>
+                <option value="science">Science</option>
+                <option value="social_studies">Social Studies</option>
+                <option value="spellings">Spellings</option>
+              </select>
+            </div>
+            <button type="button" id="topicsDrawerToggle" class="btnSmall topicsDrawerToggle" aria-expanded="false" aria-controls="topicRail">Topics</button>
             <button id="themeBtn" class="btnSmall" type="button">Theme: Auto</button>
             <button id="notesBtn" class="btnSmall" type="button">Notes</button>
             <button id="groupsBtn" class="btnSmall" type="button">Groups</button>
@@ -221,52 +232,64 @@
         </div>
       </header>
 
-      <div id="chat" class="chat" aria-live="polite" aria-busy="false"></div>
+      <div class="shellMain">
+        <div class="chatColumn">
+          <div id="chat" class="chat" aria-live="polite" aria-busy="false"></div>
 
-      <div id="quizPanel" class="quizPanel" aria-live="polite">
-        <div class="quizHeader">
-          <h2 id="quizTitle">Quick check</h2>
-          <div class="quizActions">
-            <span id="quizStatus" class="hint"></span>
-            <button id="quizCloseBtn" class="btnSmall" type="button">Close</button>
+          <div id="quizPanel" class="quizPanel" aria-live="polite">
+            <div class="quizHeader">
+              <h2 id="quizTitle">Quick check</h2>
+              <div class="quizActions">
+                <span id="quizStatus" class="hint"></span>
+                <button id="quizCloseBtn" class="btnSmall" type="button">Close</button>
+              </div>
+            </div>
+            <div id="quizBody" class="quizGrid"></div>
+            <div style="display:flex; gap:10px; margin-top: 12px;">
+              <button id="quizSubmitBtn" class="btnSmall" type="button">Submit</button>
+              <button id="quizSkipBtn" class="btnSmall" type="button">Skip</button>
+              <button id="quizRetryBtn" class="btnSmall" type="button" style="display:none;">New quiz</button>
+            </div>
+            <div id="quizResult" class="quizResult" style="display:none;"></div>
+          </div>
+
+          <div class="composer">
+            <textarea id="input" placeholder="Ask a question…"></textarea>
+            <div class="composerActions">
+              <button id="dictateBtn" class="btnSmall" type="button" title="Dictation (speech to text)" aria-label="Dictation">
+                Mic
+              </button>
+              <button id="sendBtn" type="button">Send</button>
+            </div>
+          </div>
+
+          <div class="footer">
+            <div>
+              API: <code>POST /ask</code>
+              <span id="status" style="margin-left: 10px;"></span>
+              <span id="mathStatus" style="margin-left: 10px;"></span>
+            </div>
+            <div>
+              <button id="quizBtn" class="btnSmall" type="button" style="margin-right: 10px;">Quiz (5)</button>
+              <a href="/docs" class="footerLink">OpenAPI docs</a>
+            </div>
           </div>
         </div>
-        <div id="quizBody" class="quizGrid"></div>
-        <div style="display:flex; gap:10px; margin-top: 12px;">
-          <button id="quizSubmitBtn" class="btnSmall" type="button">Submit</button>
-          <button id="quizSkipBtn" class="btnSmall" type="button">Skip</button>
-          <button id="quizRetryBtn" class="btnSmall" type="button" style="display:none;">New quiz</button>
-        </div>
-        <div id="quizResult" class="quizResult" style="display:none;"></div>
-      </div>
 
-      <div class="composer">
-        <textarea id="input" placeholder="Ask a question…"></textarea>
-        <div class="composerActions">
-          <button id="dictateBtn" class="btnSmall" type="button" title="Dictation (speech to text)" aria-label="Dictation">
-            Mic
-          </button>
-          <button id="sendBtn" type="button">Send</button>
-        </div>
-      </div>
-
-      <div class="footer">
-        <div>
-          API: <code>POST /ask</code>
-          <span id="status" style="margin-left: 10px;"></span>
-          <span id="mathStatus" style="margin-left: 10px;"></span>
-        </div>
-        <div>
-          <button id="quizBtn" class="btnSmall" type="button" style="margin-right: 10px;">Quiz (5)</button>
-          <a href="/docs" class="footerLink">OpenAPI docs</a>
-        </div>
+        <aside id="topicRailAside" class="topicRailAside" aria-label="Curriculum topics by grade and subject">
+          <div class="topicRailHeader">
+            <span class="topicRailTitle">Topics</span>
+            <button type="button" id="topicRailCloseBtn" class="btnSmall topicRailCloseBtn" aria-label="Close topics panel">Close</button>
+          </div>
+          <div id="topicRail" class="topicRail"></div>
+        </aside>
       </div>
     </div>
 
     <script src="/static/katex/katex.min.js"></script>
     <script src="/static/vendor/marked.min.js"></script>
     <script src="/static/vendor/purify.min.js"></script>
-    <script src="/static/app.js?v=2026-04-03"></script>
+    <script src="/static/app.js?v=2026-04-19"></script>
   </body>
 </html>
 

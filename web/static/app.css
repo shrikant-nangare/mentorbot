@@ -314,10 +314,10 @@ html[data-theme="dark"] body[data-wallpaper^="plain"] {
 }
 
 .shell {
-  width: min(980px, 100%);
+  width: min(1180px, 100%);
   height: min(760px, calc(100vh - 48px));
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr;
   gap: 12px;
   padding: 18px;
   border: 1px solid var(--border);
@@ -331,6 +331,10 @@ html[data-theme="dark"] body[data-wallpaper^="plain"] {
 html[data-theme="dark"] .shell {
   background: linear-gradient(180deg, rgba(0,0,0,0.34), rgba(0,0,0,0.20));
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+}
+
+html[data-theme="dark"] .topicRailAside {
+  background: rgba(0, 0, 0, 0.22);
 }
 
 html[data-theme="dark"] .chat {
@@ -397,6 +401,125 @@ html[data-theme="dark"] .gradeBox {
   html:not([data-theme]) .gradeBox,
   html[data-theme="auto"] .gradeBox {
     background: rgba(0,0,0,0.18);
+  }
+}
+
+.shellMain {
+  display: grid;
+  grid-template-columns: 1fr minmax(200px, 280px);
+  gap: 12px;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.chatColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.chatColumn .chat {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.topicRailAside {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.topicRailHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.topicRailTitle {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.topicRailCloseBtn {
+  display: none;
+}
+
+.topicRail {
+  overflow: auto;
+  flex: 1;
+  padding-right: 4px;
+}
+
+.topicRailUnitTitle {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  margin: 12px 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.topicRailUnitTitle:first-child {
+  margin-top: 0;
+}
+
+.topicRailChipWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.topicRailHint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.topicsDrawerToggle {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .shell {
+    width: min(980px, 100%);
+  }
+
+  .shellMain {
+    grid-template-columns: 1fr;
+  }
+
+  .topicRailAside {
+    display: none;
+    position: fixed;
+    top: 72px;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    z-index: 45;
+    max-height: none;
+    box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35);
+  }
+
+  .topicRailAside.topicRailAsideOpen {
+    display: flex;
+  }
+
+  .topicRailCloseBtn {
+    display: inline-flex;
+  }
+
+  .topicsDrawerToggle {
+    display: inline-flex;
   }
 }
 

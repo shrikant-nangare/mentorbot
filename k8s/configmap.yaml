@@ -30,13 +30,7 @@ data:
   MENTORBOT_LLM_TIMEOUT_S: "60"
   MENTORBOT_LLM_MAX_TOKENS: "800"
 
-  # Embeddings (OpenAI-compatible)
-  MENTORBOT_EMBEDDINGS_API_STYLE: "openai-embeddings"
-  MENTORBOT_EMBEDDINGS_BASE_URL: "https://openrouter.ai/api/v1"
+  # Embeddings (OpenAI-compatible /v1/embeddings)
+  MENTORBOT_EMBEDDINGS_BASE_URL: "https://api.openai.com/v1"
   MENTORBOT_EMBEDDINGS_MODEL: "text-embedding-3-small"
-
-  # Optional: local ollama settings (used only if selected by app config)
-  OLLAMA_BASE_URL: "http://192.168.1.215:11434"
-  OLLAMA_EMBED_MODEL: "nomic-embed-text:latest"
-  OLLAMA_KEEP_ALIVE: "24h"
 

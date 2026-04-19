@@ -1,5 +1,4 @@
 import os
-from urllib.parse import urlparse
 
 
 def _getenv_str(name: str, default: str) -> str:
@@ -97,79 +96,35 @@ BASIC_AUTH_USERNAME: str = _getenv_str("MENTORBOT_BASIC_AUTH_USERNAME", "")
 BASIC_AUTH_PASSWORD: str = _getenv_str("MENTORBOT_BASIC_AUTH_PASSWORD", "")
 
 # LLM API style:
-# - "ollama": native Ollama API via langchain-ollama (default)
-# - "openai-completions": OpenAI-compatible /v1/completions servers (e.g. llama.cpp)
-# - "openai-chat": OpenAI-compatible /v1/chat/completions (e.g. OpenRouter)
-LLM_API_STYLE: str = _getenv_str("MENTORBOT_LLM_API_STYLE", _getenv_str("LLM_API_STYLE", "ollama")).strip().lower()
-LLM_BASE_URL: str = _getenv_str("MENTORBOT_LLM_BASE_URL", _getenv_str("LLM_BASE_URL", "http://192.168.1.215:8080")).strip().rstrip("/")
+# - "openai-chat": OpenAI-compatible POST /v1/chat/completions (default)
+# - "openai-completions": OpenAI-compatible POST /v1/completions (e.g. llama.cpp server)
+LLM_API_STYLE: str = _getenv_str("MENTORBOT_LLM_API_STYLE", _getenv_str("LLM_API_STYLE", "openai-chat")).strip().lower()
+LLM_BASE_URL: str = _getenv_str(
+    "MENTORBOT_LLM_BASE_URL", _getenv_str("LLM_BASE_URL", "https://api.openai.com/v1")
+).strip().rstrip("/")
 LLM_MODEL: str = _getenv_str(
     "MENTORBOT_LLM_MODEL",
-    _getenv_str("LLM_MODEL", "ggml-org/gpt-oss-20b-GGUF"),
+    _getenv_str("LLM_MODEL", "gpt-4o-mini"),
 )
 LLM_MAX_TOKENS: int = _getenv_int("MENTORBOT_LLM_MAX_TOKENS", _getenv_int("LLM_MAX_TOKENS", 512))
 LLM_TEMPERATURE: float = _getenv_float("MENTORBOT_LLM_TEMPERATURE", _getenv_float("LLM_TEMPERATURE", 0.2))
 LLM_TIMEOUT_S: float = _getenv_float("MENTORBOT_LLM_TIMEOUT_S", _getenv_float("LLM_TIMEOUT_S", 20.0))
 _OPENAI_API_KEY: str = _getenv_str("OPENAI_API_KEY", "")
-_OPENROUTER_API_KEY: str = _getenv_str("OPENROUTER_API_KEY", "")
 _LLM_API_KEY_OVERRIDE: str = _getenv_str("MENTORBOT_LLM_API_KEY", "")
+LLM_API_KEY: str = _LLM_API_KEY_OVERRIDE if _LLM_API_KEY_OVERRIDE else _OPENAI_API_KEY
 
-# Pick the right key for the configured base URL.
-_llm_base_url_lower = (LLM_BASE_URL or "").lower()
-if _LLM_API_KEY_OVERRIDE:
-    LLM_API_KEY: str = _LLM_API_KEY_OVERRIDE
-elif "api.openai.com" in _llm_base_url_lower:
-    LLM_API_KEY = _OPENAI_API_KEY
-elif "openrouter.ai" in _llm_base_url_lower:
-    LLM_API_KEY = _OPENROUTER_API_KEY
-else:
-    # Reasonable default if using another OpenAI-compatible provider.
-    LLM_API_KEY = _OPENAI_API_KEY or _OPENROUTER_API_KEY
-OPENROUTER_SITE_URL: str = _getenv_str("OPENROUTER_SITE_URL", "")
-OPENROUTER_APP_NAME: str = _getenv_str("OPENROUTER_APP_NAME", "mentorbot")
-
-# Embeddings provider (can be Ollama or OpenAI-compatible /v1/embeddings, e.g. OpenRouter)
-EMBEDDINGS_API_STYLE: str = _getenv_str("MENTORBOT_EMBEDDINGS_API_STYLE", "").strip().lower()
+# Embeddings: OpenAI-compatible POST /v1/embeddings (base URL often matches LLM_BASE_URL).
 EMBEDDINGS_BASE_URL: str = _getenv_str("MENTORBOT_EMBEDDINGS_BASE_URL", "").strip().rstrip("/")
 EMBEDDINGS_MODEL: str = _getenv_str("MENTORBOT_EMBEDDINGS_MODEL", "text-embedding-3-small").strip()
 _EMB_API_KEY_OVERRIDE: str = _getenv_str("MENTORBOT_EMBEDDINGS_API_KEY", "")
-_emb_base_url = (EMBEDDINGS_BASE_URL or LLM_BASE_URL or "").lower()
-if _EMB_API_KEY_OVERRIDE:
-    EMBEDDINGS_API_KEY: str = _EMB_API_KEY_OVERRIDE
-elif "api.openai.com" in _emb_base_url:
-    EMBEDDINGS_API_KEY = _OPENAI_API_KEY
-elif "openrouter.ai" in _emb_base_url:
-    EMBEDDINGS_API_KEY = _OPENROUTER_API_KEY
-else:
-    EMBEDDINGS_API_KEY = _OPENAI_API_KEY or _OPENROUTER_API_KEY
+EMBEDDINGS_API_KEY: str = _EMB_API_KEY_OVERRIDE if _EMB_API_KEY_OVERRIDE else LLM_API_KEY
 
-# Ollama models
-OLLAMA_EMBED_MODEL: str = _getenv_str("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-OLLAMA_LLM_MODEL: str = _getenv_str("OLLAMA_LLM_MODEL", "gpt-oss:20b")
-OLLAMA_LLM_FALLBACK_MODEL: str = _getenv_str("OLLAMA_LLM_FALLBACK_MODEL", "gpt-oss:20b")
-# Use seconds for compatibility across clients (some expect int).
-OLLAMA_KEEP_ALIVE_S: int = _getenv_duration_s("OLLAMA_KEEP_ALIVE", 24 * 60 * 60)
-# Optional performance caps. Set to 0/empty to leave uncapped.
-OLLAMA_NUM_PREDICT: int = _getenv_int("OLLAMA_NUM_PREDICT", 0)
-OLLAMA_NUM_CTX: int = _getenv_int("OLLAMA_NUM_CTX", 0)
+# Short timeout for HTTP reachability probes (health checks).
+HTTP_CONNECT_TIMEOUT_S: float = _getenv_float("MENTORBOT_HTTP_CONNECT_TIMEOUT_S", 2.0)
 
-# Preferred configuration: provide the full base URL, e.g. http://192.168.1.215:8080
-_OLLAMA_BASE_URL_ENV = _getenv_str("OLLAMA_BASE_URL", "")
-_OLLAMA_HOST_ENV = _getenv_str("OLLAMA_HOST", "")
-_OLLAMA_PORT_ENV_RAW = os.getenv("OLLAMA_PORT")
-
-_DEFAULT_OLLAMA_BASE_URL = "http://192.168.1.191:11434"
-_base_url_candidate = _OLLAMA_BASE_URL_ENV or _DEFAULT_OLLAMA_BASE_URL
-if "://" not in _base_url_candidate:
-    _base_url_candidate = f"http://{_base_url_candidate}"
-
-_parsed = urlparse(_base_url_candidate)
-_parsed_host = _parsed.hostname or "192.168.1.191"
-_parsed_port = _parsed.port or 11434
-
-OLLAMA_BASE_URL: str = _base_url_candidate
-OLLAMA_HOST: str = _OLLAMA_HOST_ENV or _parsed_host
-OLLAMA_PORT: int = _getenv_int("OLLAMA_PORT", int(_parsed_port))
-OLLAMA_CONNECT_TIMEOUT_S: float = _getenv_float("OLLAMA_CONNECT_TIMEOUT_S", 0.4)
+# Optional headers some OpenAI-compatible providers accept (Referer / app title).
+HTTP_REFERER_OPTIONAL: str = _getenv_str("MENTORBOT_HTTP_REFERER", "")
+HTTP_TITLE_OPTIONAL: str = _getenv_str("MENTORBOT_HTTP_TITLE", "")
 
 # Retrieval
 RETRIEVAL_K: int = _getenv_int("MENTORBOT_RETRIEVAL_K", 4)
